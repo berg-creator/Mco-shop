@@ -18,7 +18,7 @@ import unittest
 import urllib.parse
 from pathlib import Path
 
-from src import config, db, importer, server
+from src import config, db, importer, scrape, server
 
 TOKEN = "123456:TESTTOKEN"
 
@@ -146,6 +146,75 @@ class ТестыРазбораПостов(unittest.TestCase):
         from src.admin import parse_sizes
         self.assertEqual(parse_sizes("M:2 L"), {"M": 2, "L": 1})
         self.assertEqual(parse_sizes("-"), {db.ONE_SIZE: 1})
+
+
+class ТестыСбораИзКанала(unittest.TestCase):
+    """Формат карточек канала: цена с точкой, повтор размера, ответы-обновления."""
+
+    def товар(self, post_id: int = 71, text: str = "") -> dict:
+        return scrape.parse_product({
+            "id": post_id,
+            "text": text or (
+                "Rick Owens DRKSHDW x Converse DBL Drkstar\n"
+                "Размеры(EUR): 41, 41, 42\n"
+                "Состояние: NEW, полный комплект!\n"
+                "Стоимость: 13.990₽\n"
+                "Купить: @sfmmfu"
+            ),
+            "photos": ["https://cdn/1.jpg"],
+            "date": "2026-07-10T08:34:56+00:00",
+            "reply_to": None,
+        })
+
+    def test_цена_с_точкой_как_разделителем_тысяч(self) -> None:
+        # «13.990₽» — это почти четырнадцать тысяч, а не девятьсот девяносто.
+        self.assertEqual(scrape.parse_money("Стоимость: 13.990₽"), 13990)
+        self.assertEqual(scrape.parse_money("12 000 ₽"), 12000)
+        self.assertEqual(scrape.parse_money("8.000₽"), 8000)
+
+    def test_повтор_размера_это_количество(self) -> None:
+        self.assertEqual(self.товар()["sizes"], {"41": 2, "42": 1})
+
+    def test_бренд_отделяется_от_названия(self) -> None:
+        product = self.товар(text="STONE ISLAND TEDDY FLEECE\nРазмер: XL\nСтоимость: 34.990₽")
+        self.assertEqual(product["brand"], "Stone Island")
+        self.assertEqual(product["name"], "TEDDY FLEECE")
+
+    def test_пост_без_размера_не_товар(self) -> None:
+        # «Можем привезти под заказ такие сумки, стоимость 12.000₽» — не наличие.
+        self.assertIsNone(self.товар(text="Можем привезти сумки\nСтоимость 12.000₽"))
+
+    def test_продажа_размера_убирает_одну_штуку(self) -> None:
+        products = {71: self.товар()}
+        scrape.apply_updates(products, [
+            {"id": 115, "reply_to": 71, "text": "❗️41 ПРОДАНО❗️", "photos": [], "date": ""},
+        ])
+        self.assertEqual(products[71]["sizes"], {"41": 1, "42": 1})
+
+    def test_продано_без_размера_закрывает_вещь(self) -> None:
+        products = {71: self.товар()}
+        scrape.apply_updates(products, [
+            {"id": 116, "reply_to": 71, "text": "❗️ПРОДАНО❗️", "photos": [], "date": ""},
+        ])
+        self.assertTrue(products[71]["sold"])
+
+    def test_новая_цена_переносит_старую_в_зачёркнутую(self) -> None:
+        products = {71: self.товар()}
+        scrape.apply_updates(products, [
+            {"id": 234, "reply_to": 71, "text": "❗️13.990₽❗️\n8.000₽ - новая цена",
+             "photos": [], "date": ""},
+        ])
+        self.assertEqual(products[71]["price"], 8000)
+        self.assertEqual(products[71]["old_price"], 13990)
+
+    def test_живой_комментарий_остаётся_человеку(self) -> None:
+        products = {71: self.товар()}
+        scrape.apply_updates(products, [
+            {"id": 233, "reply_to": 71, "text": "Привезли ещё пару размеров, 5 пар в наличии!",
+             "photos": [], "date": ""},
+        ])
+        self.assertEqual(products[71]["sizes"], {"41": 2, "42": 1})
+        self.assertTrue(products[71]["notes"])
 
 
 if __name__ == "__main__":

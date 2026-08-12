@@ -23,11 +23,14 @@ import json
 import re
 import shutil
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from . import config, db
+from .scrape import BROWSER
 
 # Бренды ниши: помогают отделить название вещи от марки. Список пополняется —
 # он не претендует на полноту, всё неузнанное просто остаётся без бренда.
@@ -199,8 +202,35 @@ def parse_export(path: Path) -> list[dict[str, Any]]:
     return drafts
 
 
+def save_photo(source: str) -> str | None:
+    """Кладёт фотографию в `data/photos` — из файла экспорта или по ссылке.
+
+    Сборщик из веб-превью (`src/scrape.py`) даёт ссылки на картинки Telegram,
+    экспорт — пути к файлам на диске. Дальше витрине всё равно, откуда фото
+    приехало: она отдаёт их из своей папки.
+    """
+    target_name = f"{uuid4().hex}.jpg"
+    target = config.PHOTOS / target_name
+
+    if source.startswith(("http://", "https://")):
+        request = urllib.request.Request(source, headers={"User-Agent": BROWSER})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                target.write_bytes(response.read())
+        except (urllib.error.URLError, TimeoutError) as error:
+            print(f"  фото не скачалось ({error}): {source[:60]}…")
+            return None
+        return target_name
+
+    source_path = Path(source)
+    if not source_path.exists():
+        return None
+    shutil.copyfile(source_path, target)
+    return target_name
+
+
 def apply_drafts(drafts: list[dict[str, Any]], skip_sold: bool = True) -> int:
-    """Заливает черновики в базу, копируя фотографии в `data/photos`."""
+    """Заливает черновики в базу, забирая к себе фотографии."""
     db.init()
     slugs = {category["slug"]: category["id"] for category in db.categories()}
     config.PHOTOS.mkdir(parents=True, exist_ok=True)
@@ -210,25 +240,21 @@ def apply_drafts(drafts: list[dict[str, Any]], skip_sold: bool = True) -> int:
         if skip_sold and draft.get("sold"):
             continue
 
-        photos: list[str] = []
-        for source in draft.get("photos", []):
-            source_path = Path(source)
-            if not source_path.exists():
-                continue
-            target_name = f"{uuid4().hex}{source_path.suffix or '.jpg'}"
-            shutil.copyfile(source_path, config.PHOTOS / target_name)
-            photos.append(target_name)
+        photos = [name for name in (save_photo(source) for source in draft.get("photos", [])) if name]
 
         description = draft.get("description", "")
+        condition = draft.get("condition") or (
+            "used" if any(word in description.lower() for word in ("б/у", "носил", "секонд", "винтаж"))
+            else "new"
+        )
         db.add_product(
             name=draft.get("name", "Без названия"),
             brand=draft.get("brand", ""),
             category_id=slugs.get(draft.get("category", "")),
             price=int(draft.get("price", 0)),
+            old_price=int(draft["old_price"]) if draft.get("old_price") else None,
             description=description,
-            condition="used" if any(
-                word in description.lower() for word in ("б/у", "носил", "секонд", "винтаж")
-            ) else "new",
+            condition=condition,
             sizes={size: int(count) for size, count in (draft.get("sizes") or {db.ONE_SIZE: 1}).items()},
             photos=photos,
             source="channel",
