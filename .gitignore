@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+
+# База и фотографии товаров — рабочие данные магазина, не код
+data/shop.db
+data/shop.db-journal
+data/shop.db-wal
+data/shop.db-shm
+data/photos/

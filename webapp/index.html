@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Магазин</title>
+  <!-- Единственный внешний скрипт: SDK мини-приложений Telegram.
+       Всё остальное лежит рядом, чтобы витрина открывалась и на плохой связи. -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="screen-catalog" class="screen">
+    <header class="head">
+      <div class="head-row">
+        <h1 id="shop-name">Магазин</h1>
+        <button id="cart-button" class="cart-button" type="button" aria-label="Корзина">
+          <span class="cart-icon">🛒</span>
+          <span id="cart-count" class="cart-count" hidden>0</span>
+        </button>
+      </div>
+      <input id="search" class="search" type="search" placeholder="Поиск: бренд, вещь, цвет" autocomplete="off">
+      <nav id="categories" class="chips" aria-label="Категории"></nav>
+      <div class="filter-row">
+        <button id="filters-button" class="filter-button" type="button">Фильтры</button>
+        <span id="found" class="found"></span>
+      </div>
+    </header>
+
+    <main id="grid" class="grid"></main>
+    <p id="empty" class="empty" hidden>Ничего не нашлось. Попробуй снять фильтры.</p>
+  </div>
+
+  <!-- Панель фильтров: выезжает снизу, как принято в мобильных магазинах -->
+  <div id="filters-sheet" class="sheet" hidden>
+    <div class="sheet-body">
+      <div class="sheet-head">
+        <h2>Фильтры</h2>
+        <button id="filters-close" class="link" type="button">Закрыть</button>
+      </div>
+      <section class="filter-block">
+        <h3>Бренд</h3>
+        <div id="filter-brands" class="chips wrap"></div>
+      </section>
+      <section class="filter-block">
+        <h3>Размер</h3>
+        <div id="filter-sizes" class="chips wrap"></div>
+      </section>
+      <section class="filter-block">
+        <h3>Состояние</h3>
+        <div id="filter-condition" class="chips wrap">
+          <button class="chip" data-condition="" type="button">Любое</button>
+          <button class="chip" data-condition="new" type="button">Новое</button>
+          <button class="chip" data-condition="used" type="button">Б/у</button>
+        </div>
+      </section>
+      <section class="filter-block">
+        <h3>Цена до <span id="price-value"></span></h3>
+        <input id="filter-price" class="range" type="range" min="0" max="100000" step="1000">
+      </section>
+      <div class="sheet-actions">
+        <button id="filters-reset" class="button ghost" type="button">Сбросить</button>
+        <button id="filters-apply" class="button" type="button">Показать</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="screen-product" class="screen" hidden>
+    <div id="gallery" class="gallery"></div>
+    <div class="product-body">
+      <p id="product-brand" class="brand"></p>
+      <h2 id="product-name" class="product-name"></h2>
+      <p class="price-row">
+        <span id="product-price" class="price"></span>
+        <span id="product-old-price" class="old-price"></span>
+        <span id="product-condition" class="badge"></span>
+      </p>
+      <p id="product-description" class="description"></p>
+      <div class="filter-block">
+        <h3>Размер</h3>
+        <div id="product-sizes" class="chips wrap"></div>
+      </div>
+      <p id="product-note" class="note"></p>
+    </div>
+  </div>
+
+  <div id="screen-cart" class="screen" hidden>
+    <header class="head">
+      <h1>Корзина</h1>
+    </header>
+    <div id="cart-items" class="cart-items"></div>
+    <p id="cart-empty" class="empty" hidden>Пока пусто. Вернись в каталог и выбери вещь.</p>
+    <p class="total-row"><span>Итого</span> <span id="cart-total" class="total"></span></p>
+  </div>
+
+  <div id="screen-checkout" class="screen" hidden>
+    <header class="head">
+      <h1>Оформление</h1>
+    </header>
+    <form id="checkout-form" class="form" autocomplete="on">
+      <label>Имя
+        <input name="customer_name" required maxlength="80" placeholder="Как к тебе обращаться">
+      </label>
+      <label>Телефон
+        <input name="phone" required type="tel" maxlength="30" placeholder="+7 900 000-00-00">
+      </label>
+      <label>Доставка
+        <select id="delivery" name="delivery"></select>
+      </label>
+      <label id="address-label">Адрес или пункт выдачи
+        <input name="address" maxlength="200" placeholder="Город, улица, дом">
+      </label>
+      <label>Комментарий
+        <textarea name="comment" rows="2" maxlength="300" placeholder="Что уточнить по заказу"></textarea>
+      </label>
+      <p class="note">Заявка уйдёт владельцу магазина в Telegram. Он свяжется с тобой,
+        чтобы подтвердить наличие и договориться об оплате.</p>
+    </form>
+  </div>
+
+  <div id="screen-done" class="screen center" hidden>
+    <p class="done-mark">✓</p>
+    <h2 id="done-title">Заявка принята</h2>
+    <p id="done-text" class="note"></p>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
