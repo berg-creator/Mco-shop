@@ -205,6 +205,27 @@ def parse_sizes(line: str) -> dict[str, int]:
     return sizes
 
 
+def clean_description(lines: list[str]) -> str:
+    """Оставляет от поста только то, чего нет в полях карточки.
+
+    Название, размер и цена витрина показывает сама, хештег канала здесь не
+    к месту, а «Купить: @sfmmfu» уводит покупателя из бота мимо корзины —
+    и заявка до владельца не доходит. Остаётся описание состояния и всё живое,
+    что он написал про вещь.
+    """
+    kept = []
+    for line in lines[1:]:
+        if SIZE_LINE.match(line) or PRICE_LINE.match(line):
+            continue
+        if re.match(r"^\s*(купить|заказать|писать|связь|контакт)\s*:", line, re.IGNORECASE):
+            continue
+        cleaned = re.sub(r"#\S+", "", line)
+        cleaned = re.sub(r"@\w+", "", cleaned).strip(" -—·|,")
+        if cleaned:
+            kept.append(cleaned)
+    return "\n".join(kept)
+
+
 def parse_product(message: dict[str, Any]) -> dict[str, Any] | None:
     """Разбирает пост-карточку. Возвращает None, если это не товар."""
     lines = [line.strip() for line in message["text"].split("\n") if line.strip()]
@@ -241,7 +262,7 @@ def parse_product(message: dict[str, Any]) -> dict[str, Any] | None:
         "old_price": None,
         "sizes": sizes,
         "condition": "used" if "б/у" in condition.lower() else "new",
-        "description": message["text"],
+        "description": clean_description(lines),
         "photos": message["photos"],
         "sold": "продано" in message["text"].lower(),
         "notes": [],

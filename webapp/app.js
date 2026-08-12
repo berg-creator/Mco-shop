@@ -71,6 +71,11 @@ async function loadCatalog() {
     renderGrid();
     updateCartBadge();
     syncButtons();
+
+    // Ссылка вида /app/#p=12 открывает сразу карточку товара: удобно скинуть
+    // покупателю конкретную вещь и проверять этот экран, не листая витрину.
+    const deepLink = location.hash.match(/p=(\d+)/);
+    if (deepLink) openProduct(Number(deepLink[1]));
   } catch (error) {
     $('empty').hidden = false;
     $('empty').textContent = 'Витрина не загрузилась. Закрой и открой магазин ещё раз.';
@@ -229,9 +234,12 @@ function openProduct(productId) {
   const withSize = product.sizes.filter((s) => s.size !== 'ONE');
   state.chosenSize = withSize.length === 1 || !withSize.length ? product.sizes[0] : null;
 
-  $('gallery').innerHTML = product.photos.length
+  const gallery = $('gallery');
+  gallery.innerHTML = product.photos.length
     ? product.photos.map((file) => `<img src="${new URL(file, PHOTOS)}" alt="${escapeHtml(product.name)}">`).join('')
     : `<div class="stub">${escapeHtml((product.brand || product.name).slice(0, 2).toUpperCase())}</div>`;
+  gallery.scrollLeft = 0;
+  renderDots(product.photos.length);
   $('product-brand').textContent = product.brand || product.category_name || '';
   $('product-name').textContent = product.name;
   $('product-price').textContent = money(product.price);
@@ -242,6 +250,24 @@ function openProduct(productId) {
 
   renderSizes();
   show('product');
+}
+
+function renderDots(count) {
+  const dots = $('gallery-dots');
+  dots.innerHTML = count > 1
+    ? Array.from({ length: count }, (_, index) => `<span class="dot ${index ? '' : 'active'}"></span>`).join('')
+    : '';
+}
+
+function updateDots() {
+  const gallery = $('gallery');
+  const dots = $('gallery-dots').children;
+  if (!dots.length) return;
+  // Какой снимок ближе к центру экрана — тот и активный.
+  const current = Math.round(gallery.scrollLeft / (gallery.scrollWidth / dots.length));
+  for (let index = 0; index < dots.length; index += 1) {
+    dots[index].classList.toggle('active', index === Math.min(current, dots.length - 1));
+  }
 }
 
 function renderSizes() {
@@ -507,6 +533,7 @@ function toast(text) {
 
 function bindEvents() {
   $('cart-button').onclick = () => show('cart');
+  $('gallery').onscroll = updateDots;
 
   let searchTimer = null;
   $('search').oninput = (event) => {
