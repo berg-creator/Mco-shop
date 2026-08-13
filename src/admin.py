@@ -273,14 +273,30 @@ def _product_line(product: dict, settings: config.Settings) -> str:
 
 
 def _item_keyboard(product: dict) -> InlineKeyboardMarkup:
-    hide_label = "Вернуть в витрину" if product["status"] != "active" else "Скрыть"
+    """Кнопки под товаром зависят от того, есть ли он в наличии.
+
+    У распроданной вещи прятать нечего, а «вернуть в витрину» ей не поможет:
+    статус сменится, но с нулевым остатком покупатель её всё равно не увидит.
+    Поэтому там одна кнопка — вернуть остаток.
+    """
+    available = sum(variant["available"] for variant in product["sizes"])
+    product_id = product["id"]
+
+    if available:
+        toggle = "Скрыть" if product["status"] == "active" else "Вернуть в витрину"
+        first_row = [
+            InlineKeyboardButton(text="Остаток", callback_data=f"item:stock:{product_id}"),
+            InlineKeyboardButton(text=toggle, callback_data=f"item:hide:{product_id}"),
+        ]
+    else:
+        first_row = [
+            InlineKeyboardButton(text="Вернуть остаток", callback_data=f"item:stock:{product_id}")
+        ]
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Остаток", callback_data=f"item:stock:{product['id']}"),
-                InlineKeyboardButton(text=hide_label, callback_data=f"item:hide:{product['id']}"),
-            ],
-            [InlineKeyboardButton(text="Удалить", callback_data=f"item:delete:{product['id']}")],
+            first_row,
+            [InlineKeyboardButton(text="Удалить", callback_data=f"item:delete:{product_id}")],
         ]
     )
 
@@ -303,6 +319,14 @@ async def toggle_hidden(callback: CallbackQuery, settings: config.Settings) -> N
     if not product:
         await callback.answer("Товар уже удалён", show_alert=True)
         return
+
+    available = sum(variant["available"] for variant in product["sizes"])
+    if product["status"] != "active" and not available:
+        # Иначе получится товар «в витрине», которого никто не видит:
+        # витрина показывает только то, что есть в наличии.
+        await callback.answer("Вещь распродана — сначала верни остаток", show_alert=True)
+        return
+
     new_status = "active" if product["status"] != "active" else "hidden"
     db.update_product(product_id, status=new_status)
     updated = db.get_product(product_id)
