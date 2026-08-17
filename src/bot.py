@@ -16,6 +16,7 @@ Long polling, а не webhook: работает без белого IP и сер
 from __future__ import annotations
 
 import logging
+from html import escape
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
@@ -37,6 +38,7 @@ STATUS_LABEL = {
     "new": "ждёт ответа",
     "confirmed": "подтверждена",
     "rejected": "отклонена",
+    "expired": f"без ответа больше {db.STALE_HOURS} часов, вещи вернулись в витрину",
 }
 
 
@@ -100,26 +102,31 @@ async def help_command(message: Message, settings: config.Settings) -> None:
 
 
 def order_text(order: dict, settings: config.Settings) -> str:
-    """Заявка одним сообщением: всё, что нужно, чтобы ответить не переспрашивая."""
+    """Заявка одним сообщением: всё, что нужно, чтобы ответить не переспрашивая.
+
+    Всё, что писал человек, экранируется: сообщения уходят с parse_mode=HTML,
+    и одна угловая скобка в имени или комментарии — это отказ Telegram принять
+    сообщение, то есть заявка, о которой владелец не узнает.
+    """
     lines = [f"🧾 <b>Заявка №{order['id']}</b> · {order['total']:,} {settings.currency}".replace(",", " ")]
     lines.append("")
-    who = order["customer_name"] or "без имени"
+    who = escape(order["customer_name"]) or "без имени"
     if order["username"]:
-        who += f" (@{order['username']})"
+        who += f" (@{escape(order['username'])})"
     lines.append(f"Покупатель: {who}")
-    lines.append(f"Телефон: {order['phone']}")
+    lines.append(f"Телефон: {escape(order['phone'])}")
     if order["delivery"]:
-        lines.append(f"Доставка: {order['delivery']}")
+        lines.append(f"Доставка: {escape(order['delivery'])}")
     if order["address"]:
-        lines.append(f"Адрес: {order['address']}")
+        lines.append(f"Адрес: {escape(order['address'])}")
     if order["comment"]:
-        lines.append(f"Комментарий: {order['comment']}")
+        lines.append(f"Комментарий: {escape(order['comment'])}")
     lines.append("")
     for item in order["items"]:
-        size = "" if item["size"] == db.ONE_SIZE else f" · размер {item['size']}"
+        size = "" if item["size"] == db.ONE_SIZE else f" · размер {escape(item['size'])}"
         count = "" if item["quantity"] == 1 else f" · {item['quantity']} шт"
         price = f"{item['price']:,}".replace(",", " ")
-        lines.append(f"• {item['title']}{size}{count} — {price} {settings.currency}")
+        lines.append(f"• {escape(item['title'])}{size}{count} — {price} {settings.currency}")
     if order["status"] != "new":
         lines.append("")
         lines.append(f"Статус: {STATUS_LABEL.get(order['status'], order['status'])}")
@@ -152,6 +159,19 @@ async def notify_admins(bot: Bot, settings: config.Settings, order_id: int) -> N
             log.warning("заявка №%s не дошла до %s: %s", order_id, admin_id, error)
 
 
+async def _show_order(callback: CallbackQuery, text: str) -> None:
+    """Переписывает сообщение с заявкой её новым состоянием.
+
+    Правка может не пройти: сообщение старше двух суток или Telegram считает
+    текст неизменившимся. Заявка при этом уже закрыта в базе, и уронить на этом
+    обработчик нельзя — иначе покупатель не получит ответа, которого ждёт.
+    """
+    try:
+        await callback.message.edit_text(text)
+    except Exception as error:  # noqa: BLE001 — решение по заявке уже принято
+        log.info("не смог переписать сообщение заявки: %s", error)
+
+
 @router.callback_query(F.data.startswith("order:"))
 async def decide_order(callback: CallbackQuery, bot: Bot, settings: config.Settings) -> None:
     if not settings.is_admin(callback.from_user.id):
@@ -164,14 +184,14 @@ async def decide_order(callback: CallbackQuery, bot: Bot, settings: config.Setti
     order = db.set_order_status(order_id, status)
 
     if order is None:
-        # Заявку уже закрыли — например, со второго устройства.
+        # Заявку уже закрыли — например, со второго устройства или она протухла.
         await callback.answer("Заявка уже закрыта", show_alert=True)
         current = db.get_order(order_id)
         if current:
-            await callback.message.edit_text(order_text(current, settings))
+            await _show_order(callback, order_text(current, settings))
         return
 
-    await callback.message.edit_text(order_text(order, settings))
+    await _show_order(callback, order_text(order, settings))
     await callback.answer("Подтверждено" if status == "confirmed" else "Отклонено")
 
     # Покупателю пишет бот: человек оставил заявку и ждёт ответа именно здесь.

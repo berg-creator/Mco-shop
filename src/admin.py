@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+from html import escape
 from uuid import uuid4
 
 from aiogram import Bot, F, Router
@@ -112,7 +113,13 @@ async def add_photo(message: Message, state: FSMContext, bot: Bot) -> None:
 
     # Берём самый большой размер: витрина показывает фото на весь экран.
     file_name = f"{uuid4().hex}.jpg"
-    await bot.download(message.photo[-1].file_id, destination=config.PHOTOS / file_name)
+    try:
+        await bot.download(message.photo[-1].file_id, destination=config.PHOTOS / file_name)
+    except Exception as error:  # noqa: BLE001 — связь до Telegram может подвести
+        # Молчать нельзя: владелец решит, что фото принято, и товар уедет без него.
+        log.warning("фото не скачалось: %s", error)
+        await message.answer("Фото не скачалось. Пришли ещё раз или продолжай без него.")
+        return
     photos.append(file_name)
     await state.update_data(photos=photos)
 
@@ -182,7 +189,8 @@ async def add_price(message: Message, state: FSMContext) -> None:
     numbers = [int(chunk) for chunk in "".join(
         character if character.isdigit() else " " for character in text.replace(" ", "")
     ).split()]
-    if not numbers:
+    # Ноль в цене — это не скидка, а вещь, которую заберут бесплатно.
+    if not numbers or numbers[0] <= 0:
         await message.answer("Не понял цену. Напиши числом, например: 24000")
         return
 
@@ -205,7 +213,9 @@ def parse_sizes(text: str) -> dict[str, int]:
     sizes: dict[str, int] = {}
     for chunk in text.replace(",", " ").split():
         size, _, quantity = chunk.partition(":")
-        size = size.strip().upper()
+        # Размер — это метка на бирке, а не фраза: в витрине кнопка на пол-экрана
+        # выглядит поломкой, поэтому длинное обрезаем.
+        size = size.strip().upper()[:6]
         if not size:
             continue
         sizes[size] = int(quantity) if quantity.strip().isdigit() else 1
@@ -261,14 +271,19 @@ async def add_description(message: Message, state: FSMContext, settings: config.
 
 
 def _product_line(product: dict, settings: config.Settings) -> str:
+    """Строка товара для админки. Название экранируется: бот пишет в HTML,
+    а в названиях из канала попадаются угловые скобки — с ними Telegram
+    отказался бы отправить сообщение, и /items выглядел бы сломанным."""
     sizes = ", ".join(
-        f"{variant['size']}×{variant['available']}"
+        f"{escape(variant['size'])}×{variant['available']}"
         for variant in product["sizes"]
         if variant["available"] > 0
     ) or "нет в наличии"
-    label = {"active": "в витрине", "hidden": "скрыт", "sold": "продан"}[product["status"]]
+    label = {"active": "в витрине", "hidden": "скрыт", "sold": "продан"}.get(
+        product["status"], product["status"]
+    )
     price = f"{product['price']:,}".replace(",", " ")
-    title = f"{product['brand']} {product['name']}".strip()
+    title = escape(f"{product['brand']} {product['name']}".strip())
     return f"№{product['id']} · {title}\n{price} {settings.currency} · {sizes} · {label}"
 
 
@@ -364,7 +379,7 @@ async def set_stock(message: Message, state: FSMContext, settings: config.Settin
 
     data = await state.get_data()
     await state.clear()
-    product_id = int(data["product_id"])
+    product_id = int(data.get("product_id") or 0)
     product = db.get_product(product_id)
     if not product:
         await message.answer("Товар уже удалён.")

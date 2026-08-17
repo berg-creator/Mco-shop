@@ -240,6 +240,20 @@ def apply_drafts(drafts: list[dict[str, Any]], skip_sold: bool = True) -> int:
         if skip_sold and draft.get("sold"):
             continue
 
+        # Черновик правит человек в текстовом редакторе, и «12 000» вместо 12000
+        # там появляется легко. Один такой черновик не должен обрывать импорт
+        # на середине: остальные заливаются, а про этот сказано вслух.
+        try:
+            price = int(draft.get("price", 0))
+            old_price = int(draft["old_price"]) if draft.get("old_price") else None
+            sizes = {
+                str(size): int(count)
+                for size, count in (draft.get("sizes") or {db.ONE_SIZE: 1}).items()
+            }
+        except (TypeError, ValueError) as error:
+            print(f"  черновик №{draft.get('post_id', '?')} пропущен: {error}")
+            continue
+
         photos = [name for name in (save_photo(source) for source in draft.get("photos", [])) if name]
 
         description = draft.get("description", "")
@@ -251,11 +265,11 @@ def apply_drafts(drafts: list[dict[str, Any]], skip_sold: bool = True) -> int:
             name=draft.get("name", "Без названия"),
             brand=draft.get("brand", ""),
             category_id=slugs.get(draft.get("category", "")),
-            price=int(draft.get("price", 0)),
-            old_price=int(draft["old_price"]) if draft.get("old_price") else None,
+            price=price,
+            old_price=old_price,
             description=description,
             condition=condition,
-            sizes={size: int(count) for size, count in (draft.get("sizes") or {db.ONE_SIZE: 1}).items()},
+            sizes=sizes,
             photos=photos,
             source="channel",
             source_ref=str(draft.get("post_id", "")),

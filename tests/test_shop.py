@@ -1,52 +1,81 @@
 """Тесты на то, что стоит денег и репутации: остатки, подпись, разбор постов.
 
-Витрина и тексты бота проверяются глазами, а вот эти четыре вещи глазами
-не проверишь: двойная продажа последней вещи, подделанная подпись, цена,
-угаданная из поста неправильно, и резерв, который не вернулся после отказа.
+Витрина проверяется глазами, а вот это глазами не проверишь: двойная продажа
+последней вещи, подделанная подпись, цена, угаданная из поста неправильно,
+резерв, который не вернулся после отказа, и заявка, которую Telegram отказался
+доставить владельцу из-за угловой скобки в имени покупателя.
+
+Веб-часть проверяется целиком, живым сервером: это единственная дверь,
+в которую стучится кто угодно из интернета.
 
     python -m unittest discover tests
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
+import io
 import json
 import tempfile
 import time
 import unittest
 import urllib.parse
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from src import config, db, importer, scrape, server
+from aiohttp.test_utils import TestClient, TestServer
+
+from src import admin, bot, config, db, importer, scrape, server
 
 TOKEN = "123456:TESTTOKEN"
 
 
-def signed_init_data(user_id: int = 42, age_seconds: int = 0) -> str:
-    """Собирает initData так же, как это делает Telegram."""
+def signed_init_data(user_id: int = 42, age_seconds: int = 0, with_user: bool = True) -> str:
+    """Собирает initData так же, как это делает Telegram.
+
+    `with_user=False` — витрину открыли не из лички, а из канала: подпись
+    настоящая, а пользователя в данных нет.
+    """
     pairs = {
         "auth_date": str(int(time.time()) - age_seconds),
         "query_id": "AAH",
-        "user": json.dumps({"id": user_id, "first_name": "Тест"}, ensure_ascii=False),
     }
+    if with_user:
+        pairs["user"] = json.dumps({"id": user_id, "first_name": "Тест"}, ensure_ascii=False)
     check = "\n".join(f"{key}={pairs[key]}" for key in sorted(pairs))
     secret = hmac.new(b"WebAppData", TOKEN.encode(), hashlib.sha256).digest()
     pairs["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
     return urllib.parse.urlencode(pairs)
 
 
+def настройки() -> config.Settings:
+    """Настройки магазина для тестов: токен тот же, которым подписан initData."""
+    return config.Settings(
+        bot_token=TOKEN,
+        admin_ids=(1,),
+        webapp_url="https://example.org/app/",
+        shop_name="Mco shop",
+        port=8080,
+        delivery_options=("Самовывоз", "СДЭК"),
+        currency="₽",
+    )
+
+
 class БазаНаВремя(unittest.TestCase):
-    """Каждый тест работает со своей базой во временной папке."""
+    """Каждый тест работает со своей базой и папкой фото во временной папке."""
 
     def setUp(self) -> None:
         self._temp = tempfile.TemporaryDirectory()
-        self._db_file = config.DB_FILE
-        config.DB_FILE = Path(self._temp.name) / "shop.db"
+        self._paths = (config.DATA, config.PHOTOS, config.DB_FILE)
+        config.DATA = Path(self._temp.name)
+        config.PHOTOS = config.DATA / "photos"
+        config.DB_FILE = config.DATA / "shop.db"
         db.init()
 
     def tearDown(self) -> None:
-        config.DB_FILE = self._db_file
+        config.DATA, config.PHOTOS, config.DB_FILE = self._paths
         self._temp.cleanup()
 
 
@@ -103,6 +132,95 @@ class ТестыОстатков(БазаНаВремя):
         self.заказать(product["sizes"][0]["variant_id"])
         self.assertEqual(db.catalog()["products"], [])
 
+    def test_одна_вещь_дважды_в_одной_заявке_не_проходит(self) -> None:
+        # Витрина складывает одинаковые позиции сама, но заявка приходит по HTTP:
+        # две строки по штуке на последнюю куртку — это попытка купить её дважды.
+        variant_id = self._товар({"M": 1})["sizes"][0]["variant_id"]
+        with self.assertRaises(db.OutOfStock):
+            db.create_order(
+                user_id=1, username="", customer_name="Тест", phone="+79001234567",
+                delivery="", address="", comment="",
+                items=[{"variant_id": variant_id, "quantity": 1},
+                       {"variant_id": variant_id, "quantity": 1}],
+            )
+        self.assertEqual(db.orders(), [])
+
+    def test_одинаковые_позиции_складываются_в_одну(self) -> None:
+        product = self._товар({"M": 2})
+        variant_id = product["sizes"][0]["variant_id"]
+        order = db.create_order(
+            user_id=1, username="", customer_name="Тест", phone="+79001234567",
+            delivery="", address="", comment="",
+            items=[{"variant_id": variant_id, "quantity": 1},
+                   {"variant_id": variant_id, "quantity": 1}],
+        )
+        self.assertEqual(len(order["items"]), 1)
+        self.assertEqual(order["items"][0]["quantity"], 2)
+        self.assertEqual(order["total"], 42000 * 2)
+        self.assertEqual(db.get_product(product["id"])["sizes"][0]["available"], 0)
+
+    def test_удаление_заказанного_товара_не_ломает_заявку(self) -> None:
+        # Владелец удаляет вещь, на которую есть заявка: заявка должна остаться
+        # читаемой, а кнопка «Удалить» — работать, а не падать на внешнем ключе.
+        product = self._товар()
+        order = self.заказать(product["sizes"][0]["variant_id"])
+        db.delete_product(product["id"])
+        saved = db.get_order(order["id"])
+        self.assertEqual(saved["items"][0]["title"], "Stone Island Куртка")
+        self.assertIsNone(saved["items"][0]["product_id"])
+        # Заявку по удалённому товару всё ещё можно закрыть — списывать нечего.
+        self.assertEqual(db.set_order_status(order["id"], "confirmed")["status"], "confirmed")
+
+    def test_скрытый_товар_заказать_нельзя(self) -> None:
+        product = self._товар()
+        db.update_product(product["id"], status="hidden")
+        with self.assertRaises(db.OutOfStock):
+            self.заказать(product["sizes"][0]["variant_id"])
+
+    def test_несуществующий_вариант_не_создаёт_заявку(self) -> None:
+        with self.assertRaises(db.OutOfStock):
+            self.заказать(99999)
+        self.assertEqual(db.orders(), [])
+
+    def test_пустая_заявка_не_создаётся(self) -> None:
+        with self.assertRaises(ValueError):
+            db.create_order(
+                user_id=1, username="", customer_name="Тест", phone="+79001234567",
+                delivery="", address="", comment="", items=[],
+            )
+
+    def test_забытая_заявка_возвращает_вещь_в_витрину(self) -> None:
+        # Владелец не ответил трое суток: вещь не должна пропасть из продажи.
+        product = self._товар()
+        order = self.заказать(product["sizes"][0]["variant_id"])
+        self.assertEqual(db.catalog()["products"], [])
+        self._состарить(order["id"], hours=db.STALE_HOURS + 1)
+
+        self.assertEqual(len(db.catalog()["products"]), 1)
+        self.assertEqual(db.get_order(order["id"])["status"], "expired")
+        # Протухшую заявку кнопками уже не закрыть: вещь снова продаётся.
+        self.assertIsNone(db.set_order_status(order["id"], "confirmed"))
+
+    def test_свежая_заявка_держит_резерв(self) -> None:
+        product = self._товар()
+        order = self.заказать(product["sizes"][0]["variant_id"])
+        self._состарить(order["id"], hours=db.STALE_HOURS - 1)
+        self.assertEqual(db.catalog()["products"], [])
+        self.assertEqual(db.get_order(order["id"])["status"], "new")
+
+    def _состарить(self, order_id: int, hours: int) -> None:
+        """Двигает дату заявки в прошлое — иначе протухания пришлось бы ждать сутками."""
+        moment = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
+        with db.connect() as conn:
+            conn.execute("UPDATE orders SET created_at = ? WHERE id = ?", (moment, order_id))
+
+    def test_остаток_из_админки_обнуляет_исчезнувший_размер(self) -> None:
+        product = self._товар({"M": 1, "L": 1})
+        db.set_quantity(product["id"], "M", 0)
+        sizes = {s["size"]: s["available"] for s in db.get_product(product["id"])["sizes"]}
+        self.assertEqual(sizes, {"M": 0, "L": 1})
+        self.assertEqual([s["size"] for s in db.catalog()["products"][0]["sizes"]], ["L"])
+
 
 class ТестыПодписи(unittest.TestCase):
     def test_валидная_подпись_даёт_пользователя(self) -> None:
@@ -124,6 +242,27 @@ class ТестыПодписи(unittest.TestCase):
 
     def test_пустая_строка_не_проходит(self) -> None:
         self.assertIsNone(server.verify_init_data("", TOKEN))
+
+    def test_мусор_вместо_данных_не_проходит(self) -> None:
+        self.assertIsNone(server.verify_init_data("вообще не query-строка", TOKEN))
+
+    def test_подпись_без_пользователя_не_проходит(self) -> None:
+        # Подпись настоящая, но заявку не к кому привязать: бот не сможет ответить.
+        self.assertIsNone(server.verify_init_data(signed_init_data(with_user=False), TOKEN))
+
+    def test_пустое_поле_не_ломает_проверку(self) -> None:
+        # В подпись входят все поля, что пришли, включая пустые: выброшенное
+        # пустое поле дало бы другую строку и отказ живому покупателю.
+        pairs = {
+            "auth_date": str(int(time.time())),
+            "start_param": "",
+            "user": json.dumps({"id": 42, "first_name": "Тест"}, ensure_ascii=False),
+        }
+        check = "\n".join(f"{key}={pairs[key]}" for key in sorted(pairs))
+        secret = hmac.new(b"WebAppData", TOKEN.encode(), hashlib.sha256).digest()
+        pairs["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+        user = server.verify_init_data(urllib.parse.urlencode(pairs), TOKEN)
+        self.assertEqual(user["id"], 42)
 
 
 class ТестыРазбораПостов(unittest.TestCase):
@@ -215,6 +354,191 @@ class ТестыСбораИзКанала(unittest.TestCase):
         ])
         self.assertEqual(products[71]["sizes"], {"41": 2, "42": 1})
         self.assertTrue(products[71]["notes"])
+
+
+class ТестыВебАПИ(БазаНаВремя, unittest.IsolatedAsyncioTestCase):
+    """Живой сервер, живые запросы: витрина, каталог и приём заявки.
+
+    Проверяется то, что видно снаружи: без подписи заявку не принимают,
+    подделанную — тоже, а разобранная не до конца корзина не превращается
+    в заявку, где не хватает вещей.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self.product_id = db.add_product(
+            name="Куртка", brand="Stone Island", price=42000, sizes={"M": 1}
+        )
+        self.variant_id = db.get_product(self.product_id)["sizes"][0]["variant_id"]
+
+        self.notified: list[int] = []
+        self.уведомление_падает = False
+        server._recent_orders.clear()  # лимит заявок живёт в процессе, а не в базе
+        application = server.create_app(настройки(), notify_order=self.заметить)
+        self.client = TestClient(TestServer(application))
+        await self.client.start_server()
+
+    async def asyncTearDown(self) -> None:
+        await self.client.close()
+
+    async def заметить(self, order_id: int) -> None:
+        if self.уведомление_падает:
+            raise RuntimeError("Telegram недоступен")
+        self.notified.append(order_id)
+
+    async def оформить(self, init_data: str | None = None, **payload):
+        body = {
+            "customer_name": "Тест",
+            "phone": "+7 900 123-45-67",
+            "delivery": "Самовывоз",
+            "address": "",
+            "comment": "",
+            "items": [{"variant_id": self.variant_id, "quantity": 1}],
+        }
+        body.update(payload)
+        headers = {"X-Telegram-Init-Data": signed_init_data() if init_data is None else init_data}
+        return await self.client.post("/api/order", json=body, headers=headers)
+
+    async def test_каталог_открыт_без_подписи(self) -> None:
+        response = await self.client.get("/api/catalog")
+        self.assertEqual(response.status, 200)
+        data = await response.json()
+        self.assertEqual(data["shop_name"], "Mco shop")
+        self.assertEqual(len(data["catalog"]["products"]), 1)
+
+    async def test_витрина_отдаётся(self) -> None:
+        response = await self.client.get("/app/")
+        self.assertEqual(response.status, 200)
+        self.assertIn("text/html", response.headers["Content-Type"])
+
+    async def test_заявка_с_подписью_принимается(self) -> None:
+        response = await self.оформить(comment="позвоните вечером")
+        self.assertEqual(response.status, 200)
+        data = await response.json()
+        self.assertEqual(data["total"], 42000)
+
+        order = db.get_order(data["order_id"])
+        self.assertEqual(order["status"], "new")
+        self.assertEqual(order["user_id"], 42)
+        self.assertEqual(order["comment"], "позвоните вечером")
+        self.assertEqual(self.notified, [data["order_id"]])
+        # Вещь ушла в резерв, значит из витрины исчезла.
+        self.assertEqual(db.catalog()["products"], [])
+
+    async def test_без_подписи_не_принимает(self) -> None:
+        response = await self.оформить(init_data="")
+        self.assertEqual(response.status, 401)
+        self.assertEqual(db.orders(), [])
+
+    async def test_подделанная_подпись_не_принимает(self) -> None:
+        pairs = dict(urllib.parse.parse_qsl(signed_init_data(user_id=42)))
+        pairs["user"] = json.dumps({"id": 43, "first_name": "Чужой"}, ensure_ascii=False)
+        response = await self.оформить(init_data=urllib.parse.urlencode(pairs))
+        self.assertEqual(response.status, 401)
+        self.assertEqual(db.orders(), [])
+
+    async def test_пустая_корзина_не_принимается(self) -> None:
+        self.assertEqual((await self.оформить(items=[])).status, 400)
+
+    async def test_имя_и_телефон_проверяются(self) -> None:
+        self.assertEqual((await self.оформить(customer_name="")).status, 400)
+        self.assertEqual((await self.оформить(phone="звоните в канал")).status, 400)
+        self.assertEqual(db.orders(), [])
+
+    async def test_битая_позиция_отклоняет_всю_заявку(self) -> None:
+        # Молча выкинуть непонятную позицию нельзя: владелец соберёт не тот заказ.
+        response = await self.оформить(items=[
+            {"variant_id": self.variant_id, "quantity": 1},
+            {"variant_id": "какой-то"},
+        ])
+        self.assertEqual(response.status, 400)
+        self.assertEqual(db.orders(), [])
+
+    async def test_разобранную_вещь_не_продать_второму(self) -> None:
+        self.assertEqual((await self.оформить()).status, 200)
+        second = await self.оформить()
+        self.assertEqual(second.status, 409)
+        self.assertIn("уже нет", (await second.json())["error"])
+
+    async def test_дважды_одна_вещь_в_корзине_не_проходит(self) -> None:
+        response = await self.оформить(items=[
+            {"variant_id": self.variant_id, "quantity": 1},
+            {"variant_id": self.variant_id, "quantity": 1},
+        ])
+        self.assertEqual(response.status, 409)
+        self.assertEqual(db.orders(), [])
+
+    async def test_лавина_заявок_упирается_в_лимит(self) -> None:
+        for _ in range(server.ORDER_LIMIT):
+            await self.оформить()
+        self.assertEqual((await self.оформить()).status, 429)
+
+    async def test_упавшее_уведомление_не_теряет_заявку(self) -> None:
+        # Telegram может лежать, а заявка уже в базе: покупателю отвечаем «принято»,
+        # владелец найдёт её в /orders. Терять оплаченное внимание нельзя.
+        self.уведомление_падает = True
+        with self.assertLogs("aiohttp.web", level="ERROR"):
+            response = await self.оформить()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(len(db.orders()), 1)
+
+    async def test_не_объект_вместо_заявки_не_роняет_сервер(self) -> None:
+        # В /api/order можно прислать что угодно: список, строку, обрезанный JSON.
+        for body in (b"[1, 2, 3]", '"привет"'.encode(), "{это не json".encode(), b"\xff\xfe"):
+            response = await self.client.post(
+                "/api/order", data=body,
+                headers={"Content-Type": "application/json",
+                         "X-Telegram-Init-Data": signed_init_data()},
+            )
+            self.assertEqual(response.status, 400, body)
+        self.assertEqual(db.orders(), [])
+
+    async def test_корень_ведёт_в_витрину(self) -> None:
+        response = await self.client.get("/", allow_redirects=False)
+        self.assertEqual(response.status, 302)
+        self.assertEqual(response.headers["Location"], "/app/")
+
+    async def test_healthz_отвечает(self) -> None:
+        data = await (await self.client.get("/healthz")).json()
+        self.assertEqual(data, {"ok": True, "products": 1})
+
+
+class ТестыЗаливкиЧерновика(БазаНаВремя):
+    def test_битый_черновик_не_обрывает_импорт(self) -> None:
+        # Черновик правят руками: «12 000» вместо 12000 — обычная опечатка,
+        # и остальной каталог из-за неё залиться должен.
+        drafts = [
+            {"post_id": 1, "name": "Куртка", "price": "12 000", "sizes": {"M": 1}},
+            {"post_id": 2, "name": "Худи", "price": 9000, "sizes": {"L": 1}},
+        ]
+        with contextlib.redirect_stdout(io.StringIO()) as вывод:
+            added = importer.apply_drafts(drafts)
+        self.assertEqual(added, 1)
+        self.assertIn("№1 пропущен", вывод.getvalue())
+        self.assertEqual([p["name"] for p in db.catalog()["products"]], ["Худи"])
+
+
+class ТестыСообщений(БазаНаВремя):
+    """Тексты уходят с parse_mode=HTML: чужие угловые скобки ломают доставку."""
+
+    def test_имя_покупателя_не_ломает_заявку(self) -> None:
+        product_id = db.add_product(name="Куртка", brand="Stone Island", price=42000)
+        variant_id = db.get_product(product_id)["sizes"][0]["variant_id"]
+        order = db.create_order(
+            user_id=1, username="<script>", customer_name="Вася <b>",
+            phone="+79001234567", delivery="", address="", comment="а можно <i>дешевле",
+            items=[{"variant_id": variant_id, "quantity": 1}],
+        )
+        text = bot.order_text(db.get_order(order["id"]), настройки())
+        self.assertIn("Вася &lt;b&gt;", text)
+        self.assertIn("&lt;i&gt;дешевле", text)
+        self.assertNotIn("<b>", text.replace("<b>Заявка", ""))
+        self.assertNotIn("<script>", text)
+
+    def test_название_товара_из_канала_не_ломает_список(self) -> None:
+        product_id = db.add_product(name="Куртка <XL>", brand="Ma.Strum", price=21000)
+        line = admin._product_line(db.get_product(product_id), настройки())
+        self.assertIn("Куртка &lt;XL&gt;", line)
+        self.assertNotIn("<XL>", line)
 
 
 if __name__ == "__main__":

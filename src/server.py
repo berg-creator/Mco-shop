@@ -40,8 +40,17 @@ INIT_DATA_TTL = 24 * 60 * 60
 # Больше живой человек не оформит, а бот — запросто.
 ORDER_LIMIT = 5
 ORDER_WINDOW = 10 * 60
+# Словарь попыток живёт в памяти процесса. Чтобы он не рос до перезапуска,
+# при переполнении из него выметаются те, чьё окно давно закрылось.
+ORDER_MEMORY = 1000
 
 _recent_orders: dict[int, list[float]] = {}
+
+# Типизированные ключи приложения: aiohttp иначе ругается на строковые,
+# а в новых версиях обещает их запретить.
+SETTINGS = web.AppKey("settings", config.Settings)
+NOTIFY_ORDER = web.AppKey("notify_order", object)
+ALLOW_UNSIGNED = web.AppKey("allow_unsigned", bool)
 
 
 def verify_init_data(init_data: str, bot_token: str) -> dict[str, Any] | None:
@@ -53,7 +62,12 @@ def verify_init_data(init_data: str, bot_token: str) -> dict[str, Any] | None:
     if not init_data or not bot_token:
         return None
     try:
-        pairs = dict(urllib.parse.parse_qsl(init_data, strict_parsing=True))
+        # keep_blank_values: в подпись входят все поля, что пришли, включая пустые.
+        # Выбросив пустое поле, мы посчитали бы другую строку и отвергли живого
+        # покупателя как самозванца.
+        pairs = dict(
+            urllib.parse.parse_qsl(init_data, strict_parsing=True, keep_blank_values=True)
+        )
     except ValueError:
         return None
 
@@ -72,16 +86,21 @@ def verify_init_data(init_data: str, bot_token: str) -> dict[str, Any] | None:
         return None
 
     try:
-        return json.loads(pairs.get("user", "{}"))
+        user = json.loads(pairs.get("user", "{}"))
     except json.JSONDecodeError:
         return None
+    # Подпись без пользователя бывает: витрину открыли не из лички, а из канала.
+    # Такую заявку принимать нельзя — бот не сможет ответить покупателю.
+    if not isinstance(user, dict) or not isinstance(user.get("id"), int):
+        return None
+    return user
 
 
 def _user_from_request(request: web.Request) -> dict[str, Any] | None:
-    settings: config.Settings = request.app["settings"]
+    settings = request.app[SETTINGS]
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     user = verify_init_data(init_data, settings.bot_token)
-    if user is None and request.app["allow_unsigned"]:
+    if user is None and request.app[ALLOW_UNSIGNED]:
         # Режим отладки в обычном браузере: подписи нет, потому что нет Telegram.
         # Включается только переменной DEV_ALLOW_UNSIGNED=1 — на сервере не ставить.
         return {"id": 0, "first_name": "Отладка", "username": "debug"}
@@ -90,6 +109,10 @@ def _user_from_request(request: web.Request) -> dict[str, Any] | None:
 
 def _rate_limited(user_id: int) -> bool:
     now = time.time()
+    if len(_recent_orders) > ORDER_MEMORY:
+        for other, moments in list(_recent_orders.items()):
+            if all(now - moment >= ORDER_WINDOW for moment in moments):
+                del _recent_orders[other]
     attempts = [moment for moment in _recent_orders.get(user_id, []) if now - moment < ORDER_WINDOW]
     _recent_orders[user_id] = attempts
     if len(attempts) >= ORDER_LIMIT:
@@ -105,7 +128,7 @@ async def handle_catalog(request: web.Request) -> web.Response:
     в открытом канале. Требовать её значило бы сломать отладку в браузере
     ради данных, которые и так публичны.
     """
-    settings: config.Settings = request.app["settings"]
+    settings = request.app[SETTINGS]
     return web.json_response(
         {
             "shop_name": settings.shop_name,
@@ -125,7 +148,9 @@ async def handle_order(request: web.Request) -> web.Response:
 
     try:
         payload = await request.json()
-    except json.JSONDecodeError:
+    except ValueError:  # битый JSON или байты не в UTF-8
+        return web.json_response({"error": "Битый запрос"}, status=400)
+    if not isinstance(payload, dict):
         return web.json_response({"error": "Битый запрос"}, status=400)
 
     items = payload.get("items") or []
@@ -146,6 +171,16 @@ async def handle_order(request: web.Request) -> web.Response:
         return web.json_response({"error": "Слишком много заявок подряд. Напиши боту"}, status=429)
 
     try:
+        wanted = [
+            {"variant_id": int(item["variant_id"]), "quantity": int(item.get("quantity", 1))}
+            for item in items
+            if isinstance(item, dict) and str(item.get("variant_id", "")).lstrip("-").isdigit()
+        ]
+        # Тихо выкинуть непонятную позицию нельзя: покупатель отправил три вещи,
+        # владелец увидел бы две и отдал не то, о чём договаривались.
+        if len(wanted) != len(items):
+            raise ValueError("часть позиций не разобрал")
+
         order = db.create_order(
             user_id=user_id,
             username=str(user.get("username", "")),
@@ -154,18 +189,14 @@ async def handle_order(request: web.Request) -> web.Response:
             delivery=str(payload.get("delivery", "")).strip()[:60],
             address=str(payload.get("address", "")).strip()[:200],
             comment=str(payload.get("comment", "")).strip()[:300],
-            items=[
-                {"variant_id": int(item["variant_id"]), "quantity": int(item.get("quantity", 1))}
-                for item in items
-                if isinstance(item, dict) and str(item.get("variant_id", "")).lstrip("-").isdigit()
-            ],
+            items=wanted,
         )
     except db.OutOfStock as error:
         return web.json_response({"error": str(error)}, status=409)
     except (KeyError, ValueError, TypeError):
         return web.json_response({"error": "Не разобрал заказ"}, status=400)
 
-    notify: Callable[[int], Awaitable[None]] = request.app["notify_order"]
+    notify: Callable[[int], Awaitable[None]] = request.app[NOTIFY_ORDER]
     try:
         await notify(order["id"])
     except Exception as error:  # noqa: BLE001 — заявка уже в базе, её нельзя терять
@@ -180,6 +211,11 @@ async def handle_index(request: web.Request) -> web.FileResponse:
         config.WEBAPP / "index.html",
         headers={"Cache-Control": "no-cache"},
     )
+
+
+async def handle_root(request: web.Request) -> web.Response:
+    """Корень ведёт в витрину: по адресу без /app/ приходят из закладок и ссылок."""
+    raise web.HTTPFound("/app/")
 
 
 async def handle_health(request: web.Request) -> web.Response:
@@ -207,13 +243,13 @@ def create_app(
     allow_unsigned: bool = False,
 ) -> web.Application:
     app = web.Application(middlewares=[no_cache_for_webapp])
-    app["settings"] = settings
-    app["notify_order"] = notify_order
-    app["allow_unsigned"] = allow_unsigned
+    app[SETTINGS] = settings
+    app[NOTIFY_ORDER] = notify_order
+    app[ALLOW_UNSIGNED] = allow_unsigned
 
     config.PHOTOS.mkdir(parents=True, exist_ok=True)
 
-    app.router.add_get("/", lambda request: web.HTTPFound("/app/"))
+    app.router.add_get("/", handle_root)
     app.router.add_get("/app/", handle_index)
     app.router.add_get("/healthz", handle_health)
     app.router.add_get("/api/catalog", handle_catalog)

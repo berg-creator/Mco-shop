@@ -24,7 +24,7 @@ import argparse
 import sqlite3
 import sys
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
 from . import config
@@ -117,20 +117,31 @@ DEFAULT_CATEGORIES = [
 
 ONE_SIZE = "ONE"  # вещь без размерной сетки: шапка, сумка, ремень
 
+# Через сколько часов резерв по заявке без ответа возвращается в витрину.
+# Трое суток: покупатель уже не ждёт, а выходные не должны съедать заявку.
+STALE_HOURS = 72
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 @contextmanager
-def connect() -> Iterator[sqlite3.Connection]:
-    """Соединение с базой: словари вместо кортежей, внешние ключи включены."""
+def connect(immediate: bool = False) -> Iterator[sqlite3.Connection]:
+    """Соединение с базой: словари вместо кортежей, внешние ключи включены.
+
+    `immediate=True` берёт запись сразу, с первого запроса. Это нужно там, где
+    сначала читают остаток, а потом его меняют: без своей блокировки два
+    покупателя успевают прочитать «одна штука есть» и оба зарезервировать её.
+    """
     config.DATA.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(config.DB_FILE, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     # WAL: чтение витрины не должно ждать, пока админка допишет товар.
     conn.execute("PRAGMA journal_mode = WAL")
+    if immediate:
+        conn.execute("BEGIN IMMEDIATE")
     try:
         yield conn
         conn.commit()
@@ -260,7 +271,19 @@ def add_photo(product_id: int, file_name: str) -> None:
 
 
 def delete_product(product_id: int) -> None:
-    with connect() as conn:
+    """Удаляет товар вместе с размерами и фото, но не с заявками.
+
+    Ссылки в старых заявках обнуляются: название, размер и цена в них уже
+    скопированы, поэтому заявка остаётся читаемой. Без этого удаление вещи,
+    которую хоть раз заказывали, падало на внешнем ключе — и кнопка «Удалить»
+    в админке молча не работала.
+    """
+    with connect(immediate=True) as conn:
+        conn.execute(
+            """UPDATE order_items SET product_id = NULL, variant_id = NULL
+               WHERE product_id = ?""",
+            (product_id,),
+        )
         conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
 
 
@@ -269,7 +292,7 @@ def _collect(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[dict[str
     products = [dict(row) for row in rows]
     if not products:
         return []
-    ids = [str(product["id"]) for product in products]
+    ids = [product["id"] for product in products]
     placeholders = ",".join("?" * len(ids))
 
     sizes: dict[int, list[dict[str, Any]]] = {}
@@ -305,6 +328,7 @@ def catalog() -> dict[str, Any]:
     работают на стороне мини-приложения: так переключение категории мгновенно,
     без похода в сеть на каждое нажатие.
     """
+    release_stale_orders()  # забытая заявка не должна держать вещь вечно
     with connect() as conn:
         rows = conn.execute(
             """SELECT p.*, c.slug AS category_slug, c.name AS category_name
@@ -405,12 +429,18 @@ def create_order(
     if not items:
         raise ValueError("пустой заказ")
 
+    # Одинаковые позиции складываются в одну до проверки остатка. Иначе две
+    # строки по одной штуке проверяются каждая по отдельности, обе проходят —
+    # и последняя куртка уезжает дважды в одной заявке.
+    wanted: dict[int, int] = {}
+    for item in items:
+        variant_id = int(item["variant_id"])
+        wanted[variant_id] = wanted.get(variant_id, 0) + max(1, int(item.get("quantity", 1)))
+
     moment = now()
-    with connect() as conn:
+    with connect(immediate=True) as conn:
         prepared: list[dict[str, Any]] = []
-        for item in items:
-            variant_id = int(item["variant_id"])
-            quantity = max(1, int(item.get("quantity", 1)))
+        for variant_id, quantity in wanted.items():
             row = conn.execute(
                 """SELECT v.id, v.size, v.quantity, v.reserved, p.id AS product_id,
                           p.name, p.brand, p.price, p.status
@@ -475,6 +505,68 @@ def get_order(order_id: int) -> dict[str, Any] | None:
     return order
 
 
+def _release_reserve(conn: sqlite3.Connection, order_id: int, sell: bool) -> None:
+    """Снимает резерв по заявке; `sell=True` заодно списывает остаток.
+
+    Позиции удалённых товаров пропускаются: у них нет варианта, с которого
+    можно было бы что-то снять, а заявка остаётся читаемой и без него.
+    """
+    for item in conn.execute(
+        "SELECT variant_id, quantity FROM order_items WHERE order_id = ?", (order_id,)
+    ).fetchall():
+        if item["variant_id"] is None:
+            continue
+        if sell:
+            conn.execute(
+                """UPDATE variants
+                   SET reserved = MAX(0, reserved - ?), quantity = MAX(0, quantity - ?)
+                   WHERE id = ?""",
+                (item["quantity"], item["quantity"], item["variant_id"]),
+            )
+        else:
+            conn.execute(
+                "UPDATE variants SET reserved = MAX(0, reserved - ?) WHERE id = ?",
+                (item["quantity"], item["variant_id"]),
+            )
+
+
+def release_stale_orders(hours: int = STALE_HOURS) -> int:
+    """Возвращает в витрину вещи из заявок, на которые владелец не ответил.
+
+    Иначе одна забытая заявка убирает вещь из продажи навсегда: резерв держит
+    остаток, витрина показывает только доступное, и владелец даже не помнит,
+    из-за чего куртка пропала. Заявка не удаляется, а получает статус `expired`,
+    чтобы в `/orders` было видно, что случилось.
+
+    Чистка живёт здесь, а не в фоновой задаче: она вызывается из `catalog()`,
+    то есть на каждом открытии витрины. Таймер, юнит и вопрос «а он запущен?»
+    для этого не нужны.
+    """
+    edge = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
+    # Дешёвая проверка обычным чтением: блокировать запись на каждом открытии
+    # витрины ради заявок, которые протухают раз в неделю, не за что.
+    with connect() as conn:
+        if not conn.execute(
+            "SELECT 1 FROM orders WHERE status = 'new' AND created_at < ? LIMIT 1", (edge,)
+        ).fetchone():
+            return 0
+
+    with connect(immediate=True) as conn:
+        stale = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM orders WHERE status = 'new' AND created_at < ?", (edge,)
+            )
+        ]
+        for order_id in stale:
+            _release_reserve(conn, order_id, sell=False)
+            conn.execute(
+                "UPDATE orders SET status = 'expired', updated_at = ? WHERE id = ?",
+                (now(), order_id),
+            )
+    return len(stale)
+
+
 def set_order_status(order_id: int, status: str) -> dict[str, Any] | None:
     """Подтверждение списывает остаток, отказ снимает резерв.
 
@@ -484,29 +576,12 @@ def set_order_status(order_id: int, status: str) -> dict[str, Any] | None:
     if status not in {"confirmed", "rejected"}:
         raise ValueError(f"неизвестный статус заявки: {status}")
 
-    with connect() as conn:
+    with connect(immediate=True) as conn:
         row = conn.execute("SELECT status FROM orders WHERE id = ?", (order_id,)).fetchone()
         if row is None or row["status"] != "new":
             return None
 
-        items = conn.execute(
-            "SELECT variant_id, quantity FROM order_items WHERE order_id = ?", (order_id,)
-        ).fetchall()
-        for item in items:
-            if item["variant_id"] is None:
-                continue
-            if status == "confirmed":
-                conn.execute(
-                    """UPDATE variants
-                       SET reserved = MAX(0, reserved - ?), quantity = MAX(0, quantity - ?)
-                       WHERE id = ?""",
-                    (item["quantity"], item["quantity"], item["variant_id"]),
-                )
-            else:
-                conn.execute(
-                    "UPDATE variants SET reserved = MAX(0, reserved - ?) WHERE id = ?",
-                    (item["quantity"], item["variant_id"]),
-                )
+        _release_reserve(conn, order_id, sell=status == "confirmed")
         conn.execute(
             "UPDATE orders SET status = ?, updated_at = ? WHERE id = ?",
             (status, now(), order_id),
@@ -603,6 +678,9 @@ def _report() -> None:
             ).fetchone()[0],
             "новых заявок": conn.execute(
                 "SELECT COUNT(*) FROM orders WHERE status = 'new'"
+            ).fetchone()[0],
+            "протухло без ответа": conn.execute(
+                "SELECT COUNT(*) FROM orders WHERE status = 'expired'"
             ).fetchone()[0],
             "подтверждённых заявок": conn.execute(
                 "SELECT COUNT(*) FROM orders WHERE status = 'confirmed'"
