@@ -52,7 +52,7 @@ async def run(settings: config.Settings, web_only: bool = False) -> None:
     )
     runner = aiohttp_web.AppRunner(application)
     await runner.setup()
-    site = aiohttp_web.TCPSite(runner, host="0.0.0.0", port=settings.port)
+    site = aiohttp_web.TCPSite(runner, host="127.0.0.1", port=settings.port)
     await site.start()
     log.info("витрина слушает http://127.0.0.1:%s/app/", settings.port)
 
