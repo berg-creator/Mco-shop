@@ -39,6 +39,17 @@ async function start() {
   if (tg) {
     tg.ready();
     tg.expand();
+    // Один expand() Telegram иногда отыгрывает назад: окно приезжает
+    // полуоткрытым, сверху виден чат. Поэтому раскрываем ещё и на каждое
+    // изменение размера, а вертикальные свайпы отключаем — иначе прокрутка
+    // витрины пальцем утягивает окно вниз вместо списка вещей.
+    tg.onEvent('viewportChanged', () => { if (!tg.isExpanded) tg.expand(); });
+    if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
+    // Полный экран (Bot API 8.0): Telegram убирает свою шапку, и витрина
+    // занимает экран целиком, как магазин, а не как вкладка в мессенджере.
+    // На старых клиентах метода нет — там остаётся раскрытое окно с шапкой.
+    if (tg.requestFullscreen) tg.requestFullscreen();
+    tg.onEvent('fullscreenChanged', syncButtons);
     tg.BackButton.onClick(goBack);
     tg.MainButton.onClick(onMainButton);
   }
@@ -250,6 +261,44 @@ function openProduct(productId) {
 
   renderSizes();
   show('product');
+}
+
+// Зум щипком. Свой обработчик, а не масштабирование страницы: витрина живёт
+// в мини-приложении с `user-scalable=no` — иначе от щипка разъезжается вся
+// вёрстка, а не одна картинка. Тянуть увеличенное фото можно пальцем.
+const zoom = { img: null, scale: 1, base: 1, spread: 0, x: 0, y: 0, fromX: 0, fromY: 0 };
+
+function spread(touches) {
+  return Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+}
+
+function zoomApply() {
+  zoom.img.style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`;
+  // Пока фото увеличено, полоса не листается: палец тянет снимок, а не галерею.
+  $('viewer-strip').style.overflowX = zoom.scale > 1 ? 'hidden' : 'auto';
+}
+
+function zoomReset() {
+  if (zoom.img) zoom.img.style.transform = '';
+  Object.assign(zoom, { img: null, scale: 1, base: 1, spread: 0, x: 0, y: 0 });
+  $('viewer-strip').style.overflowX = 'auto';
+}
+
+// Фото на весь экран: в секонде решает деталь — шов, бирка, потёртость,
+// а в карточке снимок помещается целиком и потому мелко.
+function openViewer(index) {
+  const product = state.product;
+  if (!product || !product.photos.length) return;
+  const strip = $('viewer-strip');
+  strip.innerHTML = product.photos
+    .map((file) => `<img src="${new URL(file, PHOTOS)}" alt="${escapeHtml(product.name)}">`)
+    .join('');
+  $('viewer').showModal();
+  // Ширину полосы браузер знает только после показа — до него она нулевая
+  // и прокрутка к нужному снимку молча уезжает в начало.
+  strip.scrollLeft = strip.clientWidth * index;
+  if (tg) tg.MainButton.hide();
+  haptic('light');
 }
 
 function renderDots(count) {
@@ -472,6 +521,7 @@ function show(screen) {
 }
 
 function goBack() {
+  if ($('viewer').open) { $('viewer').close(); return; }
   if (state.screen === 'product' || state.screen === 'cart') show('catalog');
   else if (state.screen === 'checkout') show('cart');
   else show('catalog');
@@ -488,7 +538,11 @@ function setMainButton(text, options = {}) {
 
 function syncButtons() {
   if (!tg) return;
-  tg.BackButton[state.screen === 'catalog' || state.screen === 'done' ? 'hide' : 'show']();
+  // Вместе с шапкой в полноэкранном режиме пропадает и кнопка «Назад»
+  // мессенджера, поэтому там витрина показывает свою.
+  const needsBack = state.screen !== 'catalog' && state.screen !== 'done';
+  $('back-button').hidden = !(tg.isFullscreen && needsBack);
+  tg.BackButton[needsBack && !tg.isFullscreen ? 'show' : 'hide']();
 
   if (state.screen === 'catalog') {
     const count = cartCount();
@@ -533,7 +587,43 @@ function toast(text) {
 
 function bindEvents() {
   $('cart-button').onclick = () => show('cart');
+  $('back-button').onclick = goBack;
   $('gallery').onscroll = updateDots;
+  $('gallery').onclick = (event) => {
+    const photos = [...$('gallery').querySelectorAll('img')];
+    const index = photos.indexOf(event.target);
+    if (index >= 0) openViewer(index);
+  };
+  // Тап по увеличенному фото возвращает его в размер, по обычному — закрывает.
+  $('viewer').onclick = () => (zoom.scale > 1 ? zoomReset() : $('viewer').close());
+  $('viewer-close').onclick = () => $('viewer').close();
+  // Кнопку мессенджера прячем на время просмотра и возвращаем после:
+  // «В корзину» рисуется поверх картинки и закрывает её нижнюю треть.
+  $('viewer').onclose = () => { zoomReset(); syncButtons(); };
+
+  const strip = $('viewer-strip');
+  strip.ontouchstart = (event) => {
+    if (event.touches.length === 2) {
+      zoom.img = strip.children[Math.round(strip.scrollLeft / strip.clientWidth)];
+      zoom.base = zoom.scale;
+      zoom.spread = spread(event.touches);
+    } else if (zoom.scale > 1) {
+      zoom.fromX = event.touches[0].clientX - zoom.x;
+      zoom.fromY = event.touches[0].clientY - zoom.y;
+    }
+  };
+  strip.ontouchmove = (event) => {
+    if (!zoom.img) return;
+    event.preventDefault();
+    if (event.touches.length === 2) {
+      zoom.scale = Math.min(4, Math.max(1, zoom.base * spread(event.touches) / zoom.spread));
+    } else if (zoom.scale > 1) {
+      zoom.x = event.touches[0].clientX - zoom.fromX;
+      zoom.y = event.touches[0].clientY - zoom.fromY;
+    }
+    zoomApply();
+  };
+  strip.ontouchend = () => { if (zoom.scale <= 1) zoomReset(); };
 
   let searchTimer = null;
   $('search').oninput = (event) => {

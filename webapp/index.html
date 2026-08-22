@@ -10,6 +10,10 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- Своя кнопка возврата: в полноэкранном режиме шапки Telegram нет,
+       а с ней нет и кнопки «Назад» мессенджера. -->
+  <button id="back-button" class="back-button" type="button" hidden>‹ Назад</button>
+
   <div id="screen-catalog" class="screen">
     <header class="head">
       <div class="head-row">
@@ -124,6 +128,13 @@
     <h2 id="done-title">Заявка принята</h2>
     <p id="done-text" class="note"></p>
   </div>
+
+  <!-- Фото на весь экран. Нативный <dialog>: свой оверлей с подложкой,
+       Esc и возвратом фокуса писать незачем — браузер умеет это сам. -->
+  <dialog id="viewer" class="viewer">
+    <div id="viewer-strip" class="viewer-strip"></div>
+    <button id="viewer-close" class="viewer-close" type="button" aria-label="Закрыть фото">×</button>
+  </dialog>
 
   <div id="toast" class="toast" hidden></div>
 
