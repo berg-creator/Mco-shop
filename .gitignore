@@ -9,3 +9,9 @@ data/shop.db-journal
 data/shop.db-wal
 data/shop.db-shm
 data/photos/
+.env.deploy
+backups/
+
+# отчёты о покрытии тестами
+.coverage
+htmlcov/

@@ -1,0 +1,13 @@
+# Настройки замера покрытия. Проверить: python -m coverage run --source=src -m
+# unittest discover tests && python -m coverage report -m
+[run]
+source = src
+branch = true
+
+[report]
+fail_under = 100
+show_missing = true
+exclude_lines =
+    # Запуск модуля из командной строки: строку `sys.exit(main())` вызывает
+    # интерпретатор, а не тест, — сама `main()` покрыта отдельно.
+    if __name__ == .__main__.:

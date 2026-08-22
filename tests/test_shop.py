@@ -265,6 +265,24 @@ class ТестыПодписи(unittest.TestCase):
         self.assertEqual(user["id"], 42)
 
 
+    def test_строка_без_пар_ключ_значение_не_проходит(self) -> None:
+        self.assertIsNone(server.verify_init_data("мусор", TOKEN))
+
+    def test_данные_без_подписи_вообще_не_проходят(self) -> None:
+        данные = signed_init_data()
+        без_подписи = "&".join(
+            пара for пара in данные.split("&") if not пара.startswith("hash=")
+        )
+        self.assertIsNone(server.verify_init_data(без_подписи, TOKEN))
+
+    def test_пользователь_не_json_не_проходит(self) -> None:
+        pairs = {"auth_date": str(int(time.time())), "user": "{это не json"}
+        check = "\n".join(f"{key}={pairs[key]}" for key in sorted(pairs))
+        secret = hmac.new(b"WebAppData", TOKEN.encode(), hashlib.sha256).digest()
+        pairs["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+        self.assertIsNone(server.verify_init_data(urllib.parse.urlencode(pairs), TOKEN))
+
+
 class ТестыРазбораПостов(unittest.TestCase):
     def test_цена_в_разных_написаниях(self) -> None:
         self.assertEqual(importer.find_price("Цена 42 000 ₽"), 42000)
@@ -453,6 +471,12 @@ class ТестыВебАПИ(БазаНаВремя, unittest.IsolatedAsyncioTes
         self.assertEqual(response.status, 400)
         self.assertEqual(db.orders(), [])
 
+    async def test_слишком_длинная_корзина_не_принимается(self) -> None:
+        позиции = [{"variant_id": self.variant_id, "quantity": 1} for _ in range(51)]
+        response = await self.оформить(items=позиции)
+        self.assertEqual(response.status, 400)
+        self.assertIn("Слишком много", (await response.json())["error"])
+
     async def test_разобранную_вещь_не_продать_второму(self) -> None:
         self.assertEqual((await self.оформить()).status, 200)
         second = await self.оформить()
@@ -540,6 +564,61 @@ class ТестыСообщений(БазаНаВремя):
         self.assertIn("Куртка &lt;XL&gt;", line)
         self.assertNotIn("<XL>", line)
 
+
+class ТестыОтладочногоРежима(БазаНаВремя, unittest.IsolatedAsyncioTestCase):
+    """DEV_ALLOW_UNSIGNED: витрина открывается в обычном браузере, без Telegram.
+
+    Режим существует ради отладки и он же — дыра, если попадёт на сервер:
+    заявку принимают вообще без подписи. Поэтому проверяется явно.
+    """
+
+    async def asyncSetUp(self) -> None:
+        product_id = db.add_product(name="Куртка", brand="Stone Island", price=42000)
+        self.variant_id = db.get_product(product_id)["sizes"][0]["variant_id"]
+        server._recent_orders.clear()
+        application = server.create_app(
+            настройки(), notify_order=self.заметить, allow_unsigned=True
+        )
+        self.client = TestClient(TestServer(application))
+        await self.client.start_server()
+
+    async def asyncTearDown(self) -> None:
+        await self.client.close()
+
+    async def заметить(self, order_id: int) -> None:
+        self.order_id = order_id
+
+    async def test_заявка_без_подписи_принимается_и_подписывается_отладкой(self) -> None:
+        response = await self.client.post("/api/order", json={
+            "customer_name": "Отладка",
+            "phone": "+7 900 123-45-67",
+            "items": [{"variant_id": self.variant_id, "quantity": 1}],
+        })
+        self.assertEqual(response.status, 200)
+        order = db.get_order((await response.json())["order_id"])
+        self.assertEqual(order["user_id"], 0)
+
+    async def test_фотографии_кэшируются_надолго(self) -> None:
+        config.PHOTOS.mkdir(parents=True, exist_ok=True)
+        (config.PHOTOS / "снимок.jpg").write_bytes(b"\xff\xd8\xff")
+        response = await self.client.get("/photos/снимок.jpg")
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["Cache-Control"], "public, max-age=604800")
+
+
+class ТестыЛимитаЗаявок(unittest.TestCase):
+    def test_память_лимита_не_растёт_бесконечно(self) -> None:
+        server._recent_orders.clear()
+        давно = time.time() - server.ORDER_WINDOW - 1
+        for user_id in range(server.ORDER_MEMORY + 1):
+            server._recent_orders[user_id] = [давно]
+        server._recent_orders[7] = [time.time()]  # этот оформлял заявку только что
+        try:
+            self.assertFalse(server._rate_limited(999999))
+            # Забытые окна выметены, живые попытки остались.
+            self.assertEqual(sorted(server._recent_orders), [7, 999999])
+        finally:
+            server._recent_orders.clear()
 
 if __name__ == "__main__":
     unittest.main()

@@ -139,7 +139,17 @@ Telegram пускает в мини-приложение только по HTTPS
 ```bash
 .venv/bin/python -m src.app --check          # настройки и база
 .venv/bin/python -m src.db --check           # что лежит в каталоге
-.venv/bin/python -m unittest discover tests  # остатки, подпись, разбор постов
+.venv/bin/python -m unittest discover tests  # весь бот: 186 тестов
 ```
+
+Тесты покрывают `src/` целиком — каждую строку и каждую ветку. Замерить:
+
+```bash
+.venv/bin/pip install coverage               # только для разработки
+.venv/bin/python -m coverage run -m unittest discover tests
+.venv/bin/python -m coverage report -m       # планка 100% в .coveragerc
+```
+
+Витрина (`webapp/`) проверяется глазами: `--web-only` и браузер.
 
 Правила проекта и объяснение решений — в [CLAUDE.md](CLAUDE.md).
