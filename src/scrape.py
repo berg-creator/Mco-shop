@@ -196,6 +196,10 @@ def parse_sizes(line: str) -> dict[str, int]:
     for piece in re.split(r"[,/]| и ", line):
         # «XS(факт S)» — берём то, что написано на бирке, примечание останется в описании
         piece = re.sub(r"\(.*?\)", "", piece).strip().upper()
+        # «42 EUR», «EU 41», «размер 34» — единица измерения написана рядом
+        # с числом и к бирке отношения не имеет. Без этого последний размер
+        # в строке «41, 41, 42 EUR» молча терялся вместе с парой обуви.
+        piece = re.sub(r"\b(EUR|EU|US|UK|RU|SIZE|РАЗМЕР|СМ|CM)\b", "", piece).strip()
         piece = piece.strip(".;:")
         if not piece or len(piece) > 6:
             continue

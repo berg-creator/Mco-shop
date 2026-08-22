@@ -161,7 +161,9 @@ def parse_export(path: Path) -> list[dict[str, Any]]:
     к предыдущему разобранному товару.
     """
     data = json.loads(path.read_text(encoding="utf-8"))
-    messages = data.get("messages", data if isinstance(data, list) else [])
+    messages = data.get("messages", []) if isinstance(data, dict) else (
+        data if isinstance(data, list) else []
+    )
     export_dir = path.parent
 
     drafts: list[dict[str, Any]] = []
