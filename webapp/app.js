@@ -14,7 +14,7 @@ const API = new URL('../api/', location.href);
 const PHOTOS = new URL('../photos/', location.href);
 const CART_KEY = 'mco-shop-cart';
 // Личка владельца магазина: вопрос уходит ему самому, а не через бота.
-const SELLER = 'sfmmfu';
+const SELLER = 'seller_username';
 
 const state = {
   shop: 'Магазин',

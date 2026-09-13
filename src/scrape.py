@@ -11,7 +11,7 @@
     Размер: L
     Состояние: NEW, с навесными бирками
     Стоимость: 17.990₽
-    Купить: @sfmmfu
+    Купить: @seller_username
 
 Наличие живёт не в самом посте, а в ответах на него: «❗️42 ПРОДАНО❗️» убирает
 одну пару этого размера, «❗️ПРОДАНО❗️» закрывает вещь целиком, а «8.000₽ —
@@ -26,8 +26,8 @@
 Разбор HTML сделан регулярными выражениями: разметка веб-превью простая
 и стабильная, а тянуть в проект парсер ради одного разового сбора незачем.
 
-    python -m src.scrape Mcoworldwide --dry-run       посмотреть, что выйдет
-    python -m src.scrape Mcoworldwide --out draft.json  черновик на правку
+    python -m src.scrape example_channel --dry-run       посмотреть, что выйдет
+    python -m src.scrape example_channel --out draft.json  черновик на правку
     python -m src.importer --apply draft.json           залить в базу
 """
 
@@ -213,7 +213,7 @@ def clean_description(lines: list[str]) -> str:
     """Оставляет от поста только то, чего нет в полях карточки.
 
     Название, размер и цена витрина показывает сама, хештег канала здесь не
-    к месту, а «Купить: @sfmmfu» уводит покупателя из бота мимо корзины —
+    к месту, а «Купить: @seller_username» уводит покупателя из бота мимо корзины —
     и заявка до владельца не доходит. Остаётся описание состояния и всё живое,
     что он написал про вещь.
     """
@@ -257,7 +257,7 @@ def parse_product(message: dict[str, Any]) -> dict[str, Any] | None:
     brand = find_brand(name)
     return {
         "post_id": message["id"],
-        "link": f"https://t.me/Mcoworldwide/{message['id']}",
+        "link": f"https://t.me/example_channel/{message['id']}",
         "date": message["date"],
         "name": strip_brand(name, brand)[:120],
         "brand": brand,
@@ -369,7 +369,7 @@ def _report(drafts: list[dict[str, Any]], skipped: list[dict[str, Any]]) -> None
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Сбор каталога из публичного канала")
-    parser.add_argument("channel", help="юзернейм канала без @, например Mcoworldwide")
+    parser.add_argument("channel", help="юзернейм канала без @, например example_channel")
     parser.add_argument("--out", help="сохранить черновик в JSON")
     parser.add_argument("--dry-run", action="store_true", help="только показать разбор")
     parser.add_argument("--pages", type=int, default=40, help="сколько страниц архива пройти")

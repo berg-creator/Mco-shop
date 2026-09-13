@@ -90,7 +90,7 @@ Telegram пускает в мини-приложение только по HTTPS
 веб-версию канала и раскладывает посты по карточкам.
 
 ```bash
-.venv/bin/python -m src.scrape Mcoworldwide --out draft.json
+.venv/bin/python -m src.scrape example_channel --out draft.json
 .venv/bin/python -m src.importer --apply draft.json
 ```
 
