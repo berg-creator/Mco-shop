@@ -27,7 +27,7 @@ from pathlib import Path
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from src import admin, bot, config, db, importer, scrape, server
+from src import admin, bot, config, db, importer, music, scrape, server
 
 TOKEN = "123456:TESTTOKEN"
 
@@ -64,18 +64,20 @@ def настройки() -> config.Settings:
 
 
 class БазаНаВремя(unittest.TestCase):
-    """Каждый тест работает со своей базой и папкой фото во временной папке."""
+    """Каждый тест работает со своей базой, папкой фото и музыкой во временной папке."""
 
     def setUp(self) -> None:
         self._temp = tempfile.TemporaryDirectory()
-        self._paths = (config.DATA, config.PHOTOS, config.DB_FILE)
+        self._paths = (config.DATA, config.PHOTOS, config.MUSIC, config.DB_FILE)
         config.DATA = Path(self._temp.name)
         config.PHOTOS = config.DATA / "photos"
+        config.MUSIC = config.DATA / "music"
+        config.MUSIC.mkdir()
         config.DB_FILE = config.DATA / "shop.db"
         db.init()
 
     def tearDown(self) -> None:
-        config.DATA, config.PHOTOS, config.DB_FILE = self._paths
+        config.DATA, config.PHOTOS, config.MUSIC, config.DB_FILE = self._paths
         self._temp.cleanup()
 
 
@@ -428,6 +430,17 @@ class ТестыВебАПИ(БазаНаВремя, unittest.IsolatedAsyncioTes
         self.assertEqual(response.status, 200)
         self.assertIn("text/html", response.headers["Content-Type"])
 
+    async def test_витрину_клиент_не_хранит(self) -> None:
+        """Обрезанная копия, осевшая в WebKit, не открывалась месяцами.
+
+        Страница и `app.js` попались на этом по очереди, поэтому проверяются
+        оба: `no-store` должен стоять на всём /app, а не на одной странице.
+        """
+        for path in ("/app/", "/app/app.js"):
+            with self.subTest(path=path):
+                response = await self.client.get(path)
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+
     async def test_заявка_с_подписью_принимается(self) -> None:
         response = await self.оформить(comment="позвоните вечером")
         self.assertEqual(response.status, 200)
@@ -597,6 +610,27 @@ class ТестыОтладочногоРежима(БазаНаВремя, unitt
         self.assertEqual(response.status, 200)
         order = db.get_order((await response.json())["order_id"])
         self.assertEqual(order["user_id"], 0)
+
+    async def test_витрина_узнаёт_про_плейлист_из_каталога(self) -> None:
+        """Песни и ритм каждой приезжают с каталогом — отдельного запроса нет."""
+        каталог = await (await self.client.get("/api/catalog")).json()
+        self.assertEqual(каталог["music"], [])  # музыки нет, в витрине тихо
+
+        for имя, bpm in (("track-1.mp3", 73.5), ("track-2.mp3", 174.0)):
+            (config.MUSIC / имя).write_bytes(b"\xff\xfb\x90")
+            music.add(имя, имя, {"bpm": bpm, "flip_ms": 3265, "offset_ms": 1780})
+
+        каталог = await (await self.client.get("/api/catalog")).json()
+        # Порядок здесь — порядок присылки: тасует его витрина, а не сервер.
+        self.assertEqual([трек["bpm"] for трек in каталог["music"]], [73.5, 174.0])
+        self.assertEqual(каталог["music"][0]["flip_ms"], 3265)
+
+        песня = await self.client.get(каталог["music"][1]["url"])
+        self.assertEqual(песня.status, 200)
+        # Имена файлов повторяются от плейлиста к плейлисту, поэтому кэш
+        # держится на метке версии.
+        self.assertEqual(песня.headers["Cache-Control"], "public, max-age=604800")
+        self.assertIn("?v=", каталог["music"][1]["url"])
 
     async def test_фотографии_кэшируются_надолго(self) -> None:
         config.PHOTOS.mkdir(parents=True, exist_ok=True)

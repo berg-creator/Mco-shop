@@ -266,8 +266,14 @@ class ФейкБотЗапуска:
         self.session = ФейкСессия()
         self.menu_button = None
 
+    async def get_chat_menu_button(self, **kwargs: object) -> object:
+        return self.menu_button
+
     async def set_chat_menu_button(self, menu_button: object = None, **kwargs: object) -> None:
         self.menu_button = menu_button
+
+    async def set_my_commands(self, commands: object, scope: object = None, **kwargs: object) -> None:
+        self.commands = commands
 
     async def get_me(self) -> SimpleNamespace:
         return SimpleNamespace(username="mco_shop_bot")

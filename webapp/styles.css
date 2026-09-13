@@ -1,24 +1,58 @@
-/* Оформление витрины.
+/* Оформление витрины: чёрная тушь по белому.
 
-   Цвета берутся из темы Telegram (--tg-theme-*), а не задаются своими:
-   мини-приложение должно выглядеть частью мессенджера, а у пользователя может
-   стоять любая тема. Запасные значения нужны, чтобы витрина открывалась
-   и в обычном браузере при отладке. */
+   Стилистика взята с аватарки магазина — тонкие линии, разрядка в заглавных,
+   каллиграфическое имя. Цветов нет вообще: ни одного оттенка, кроме чёрного,
+   белого и серого между ними. Раньше здесь был «старый телевизор» (кинескоп,
+   пиксельный шрифт, глитч, жёлтый акцент, радужный логотип) — он сам себя
+   показывал громче товара, а магазин продаёт вещи.
+
+   Цвета не берутся из темы Telegram (--tg-theme-*) намеренно: у магазина
+   свой характер, и покупатель должен помнить, где был. Витрина светлая
+   и в тёмной теме мессенджера тоже — это решение, а не недосмотр.
+
+   Шрифты — системные. Ни одного файла и ни одного похода на чужой домен:
+   витрина должна открываться на плохой связи. Имя магазина набрано
+   антиквой курсивом — ближайшее, что есть на всех телефонах к росчерку
+   с аватарки; подпись под ним — тем же жирным разряженным гротеском,
+   что и «WORLDWIDE». */
 
 :root {
-  --bg: var(--tg-theme-bg-color, #17181a);
-  --fg: var(--tg-theme-text-color, #f2f2f2);
-  --hint: var(--tg-theme-hint-color, #8b8f96);
-  --card: var(--tg-theme-secondary-bg-color, #212327);
-  --accent: var(--tg-theme-button-color, #2f8fed);
-  --accent-fg: var(--tg-theme-button-text-color, #ffffff);
-  --line: color-mix(in srgb, var(--hint) 25%, transparent);
-  --radius: 14px;
-  /* В полноэкранном режиме сверху экрана чёлка, а поверх витрины висят
-     плавающие кнопки Telegram. Обе величины мессенджер кладёт сюда сам;
-     запасной ноль нужен для обычного окна и для браузера при отладке. */
+  --bg: #fff;
+  --fg: #0a0a0a;
+  --hint: #8a8a8a;
+  /* Заливка полей и заглушек. На белом фоне карточке хватает волосяной
+     рамки, а вот поиску и чипсам нужна подложка, иначе их не видно. */
+  --card: #f4f4f4;
+  --line: #dcdcdc;
+  --accent: #0a0a0a;
+  --accent-fg: #fff;
+  /* Углы прямые: у логотипа нет ни одного скругления. */
+  --radius: 0;
+  --serif: Georgia, "Times New Roman", serif;
+  /* Росчерк с аватарки — системной каллиграфией, без единого файла шрифта.
+     Почему стек именно такой, см. у `.logo h1`. */
+  --script: "Snell Roundhand", "Savoye LET", "Apple Chancery", "Segoe Script", Georgia, serif;
+  /* Сверху экрана чёлка, а поверх витрины — кнопки «×» и «⋯» мессенджера.
+     Обе величины Telegram кладёт сюда сам, запасной ноль нужен для обычного
+     окна и для браузера при отладке. Отступ съедает только шапка витрины
+     (см. `.head`): она прилипает к нулю и закрывает эту зону своим фоном,
+     иначе над ней остаётся щель, в которую видно проезжающие карточки. */
   --safe-top: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px));
 }
+
+/* В полноэкранном режиме под кнопками держим минимум их высоты: не всякий
+   клиент сообщает свою content safe area, а «Закрыть» поверх названия
+   магазина — это то же, что его не написать. */
+body.fullscreen {
+  --safe-top: calc(var(--tg-safe-area-inset-top, 0px) + max(var(--tg-content-safe-area-inset-top, 0px), 46px));
+}
+
+/* На компьютере Telegram рисует свою шапку над витриной и ту же высоту
+   присылает в safe area — витрина уезжала вниз на сотню пустых пикселей.
+   Чёлки на десктопе нет, отступ нужен только под кнопки полноэкранного
+   режима, где своей шапки уже не рисуют. */
+body.desktop { --safe-top: 0px; }
+body.desktop.fullscreen { --safe-top: 46px; }
 
 * { box-sizing: border-box; }
 
@@ -26,103 +60,318 @@
    поэтому скрытие задаётся явно — иначе панель фильтров висит поверх витрины. */
 [hidden] { display: none !important; }
 
+/* Вбок страница не ездит вовсе. У знака в шапке росчерк «M» вылезает далеко
+   за свою коробку (см. `.logo h1`), и от него документ становится шире экрана:
+   на телефоне вся витрина — вместе с фильтром, который висит `fixed`, —
+   оттягивалась вправо-влево от любого движения пальцем наискось. `clip`,
+   а не `hidden`: `hidden` сделал бы из корня прокручиваемый ящик и отклеил
+   липкую шапку, а обрезать хвост росчерка у края экрана нечем — он и так
+   за экраном. */
+html { overflow-x: clip; }
+
 body {
   margin: 0;
-  padding: var(--safe-top) 0 calc(96px + var(--tg-safe-area-inset-bottom, 0px));
+  /* Без этого браузер «придерживает» видимое место, когда над ним меняется
+     высота, и карточка открывается уже прокрученной. */
+  overflow-anchor: none;
+  /* Свайп вбок — наш: им меняются разделы. Иначе браузер на компьютере
+     уводит витрину назад по своей истории тем же движением. Только поперёк:
+     вдоль остаются и оттяжка, и «потянуть, чтобы обновить». */
+  overscroll-behavior-x: contain;
+  padding: 0 0 calc(96px + var(--tg-safe-area-inset-bottom, 0px));
   background: var(--bg);
   color: var(--fg);
-  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   -webkit-tap-highlight-color: transparent;
 }
 
-h1 { font-size: 20px; margin: 0; }
-h2 { font-size: 17px; margin: 0; }
-h3 { font-size: 13px; margin: 0 0 8px; color: var(--hint); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+/* До включения витрины на экране чёрное, и не рисуется ничего, кроме заставки.
+   Раньше витрина проявлялась кусками: браузер рисует разметку по мере разбора,
+   и шапка каталога успевала встать на экран раньше, чем разбиралась заставка
+   в конце <body>. А снизу в этот момент чернела полоса — окно мессенджера
+   дорастает до полного экрана уже после первого кадра страницы, и под
+   недорисованной витриной был виден его собственный фон. Полосы больше нет
+   не потому, что её замазали: до включения весь экран такой же чёрный,
+   и дорастать окну не через что. `body:not(.lit)` — само включение
+   в `crt-on` ниже, класс вешает app.js, когда кадр раскрылся. */
+body:not(.lit) { background: #000; }
+body:not(.lit) > :not(#boot) { visibility: hidden; }
 
-.screen { padding: 0 14px; }
-.screen.center { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 70vh; text-align: center; gap: 8px; }
+/* Разрядка в заглавных — главный приём аватарки. Ею набраны имя магазина,
+   бренды и заголовки: этого хватает, чтобы витрина читалась как одна вещь
+   с логотипом, и не нужен ни один посторонний шрифт. */
+h1 {
+  margin: 0; font-size: 14px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .2em; overflow-wrap: anywhere;
+}
+h2 { margin: 0; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .16em; }
+h3 { margin: 0 0 10px; font-size: 11px; font-weight: 700; color: var(--hint); text-transform: uppercase; letter-spacing: .16em; }
 
-.head { position: sticky; top: var(--safe-top); z-index: 5; background: var(--bg); padding: 12px 0 8px; }
+.screen { padding: 0 16px; }
+/* Экраны без своей шапки начинаются ниже чёлки и плавающих кнопок Telegram. */
+#screen-product, #screen-done { padding-top: var(--safe-top); }
+.screen.center { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 70vh; text-align: center; gap: 10px; }
+
+/* Шапка липкая, и на белом её надо отделить от уезжающих под неё карточек —
+   волосяной линейкой, а не тенью: теней в логотипе нет. */
+.head {
+  position: sticky; top: 0; z-index: 5; background: var(--bg);
+  padding: calc(8px + var(--safe-top)) 0 10px; border-bottom: 1px solid var(--line);
+}
 .head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
-/* Плавающая пилюля поверх витрины — на месте, где её ищет рука: там же,
-   где была кнопка «Назад» мессенджера. */
-.back-button {
-  position: fixed; left: 14px; top: calc(var(--tg-safe-area-inset-top, 0px) + 8px); z-index: 15;
-  padding: 8px 15px 8px 11px; border: 0; border-radius: 999px;
-  background: color-mix(in srgb, var(--card) 85%, transparent);
-  color: var(--fg); font-size: 15px; cursor: pointer;
-  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+/* Логотип магазина — ровно тот же знак, что на аватарке: планета крутится,
+   буквы стоят перед ней. Не «планета, а рядом имя»: на аватарке росчерк лежит
+   поверх шара, и в шапке должно быть так же. Обе части кладутся в одну клетку
+   сетки — ширину знака задаёт надпись, она шире планеты, как и на аватарке;
+   планета при этом одна и та же и здесь, и во весь экран на заставке загрузки.
+   Надпись не дублируется картинкой — имя магазина уже стоит в `h1` и приезжает
+   из настроек. */
+.logo { position: relative; display: flex; align-items: center; min-height: 52px; max-width: 100%; }
+/* Планета в шапке — та же самая и ровно так же нарисованная, только меньше:
+   линии тоньше вместе с шаром, поэтому сетка и на полусотне пикселей остаётся
+   сеткой, а не серым пятном, и гасить её прозрачностью больше не нужно.
+   Знак, собравшийся по центру экрана, приезжает сюда без единой правки. */
+.logo .globe { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 52px; height: 52px; }
+
+/* Планета: проволочный глобус, который сперва рисуется на глазах, а потом
+   вращается вокруг своей оси. Лежит прямо в разметке, а не отдельным файлом
+   в `<img>`, и это не вкусовщина: у картинки свой размер, о котором браузер
+   договаривается с вёрсткой сам, и на айфоне заставка через раз показывала
+   планету размером с ноготь где-то в углу, пока та рисовалась, а потом разом
+   подставляла настоящую. Разметке договариваться не о чем — она одна.
+   Заодно исчезли две подпорки: свой адрес картинке ради перезапуска
+   прорисовки и общий адрес обеим планетам ради общей фазы вращения.
+
+   Вращение сделано не поворотом картинки, а сжатием меридианов: у шара,
+   который крутится, параллели стоят на месте, а меридианы уезжают за горизонт —
+   их видимая ширина ходит по косинусу. Шесть меридианов с равным сдвигом фазы
+   дают непрерывный оборот; сетка при этом остаётся сеткой, а не блином,
+   повёрнутым в плоскости.
+
+   Прорисовка — пунктир, съезжающий до нуля. Штрих (300) чуть длиннее самой
+   длинной линии — меридиана в 276 единиц, — поэтому линия выезжает одним
+   куском, а не отрезками. Меряется он в единицах viewBox: в экранных пикселях
+   (`non-scaling-stroke`) их на телефоне втрое больше, чем на маке, и планета
+   рисовалась кусками. Толщина линии тоже в единицах viewBox — знак в шапке
+   и знак во весь экран должны быть одним знаком разного размера.
+   Нарисованная планета — состояние по умолчанию, а прячет линии сама анимация
+   (`from` плюс заполнение `both`): нет анимаций — логотип виден целиком.
+   Длина не нормируется (`pathLength`) намеренно: с общим пунктиром перо идёт
+   по всем линиям с одинаковой скоростью, и короткая параллель дорисовывается
+   раньше длинного меридиана — как рукой, а не по таймеру. Задержки ведут волну
+   от экватора наружу: линии растут от надписи, которая лежит ровно по центру. */
+.globe .wire {
+  fill: none; stroke: var(--fg); stroke-width: .5;
+  stroke-dasharray: 300; stroke-dashoffset: 0;
+  animation: draw 1.3s linear both;
+}
+/* Ширина по косинусу: равномерное вращение, а не пульсация. Оборот целиком —
+   десять секунд: медленнее не читается как движение, быстрее превращает
+   логотип в вертушку. */
+.globe .meridian { animation: draw 1.3s linear both, turn 10s linear infinite; }
+@keyframes draw { from { stroke-dashoffset: 300; } }
+@keyframes turn {
+  0%   { rx: 44px; }
+  12.5%{ rx: 40.7px; }
+  25%  { rx: 31.1px; }
+  37.5%{ rx: 16.8px; }
+  50%  { rx: 0px; }
+  62.5%{ rx: 16.8px; }
+  75%  { rx: 31.1px; }
+  87.5%{ rx: 40.7px; }
+  100% { rx: 44px; }
+}
+/* Берега тоньше сетки и светлее её: на самом логотипе это волосяные линии,
+   которые видно, только если присмотреться. Рисуются они не здесь, а в
+   `spinLand()`: шар крутится, и берег едет вместе с ним, поэтому и прорисовка
+   ведётся тем же пером в том же цикле — карта растёт вместе с сеткой, а не
+   проявляется поверх готовой планеты. */
+.globe .land {
+  fill: none; stroke: var(--fg); stroke-width: .35; stroke-linejoin: round;
+  opacity: .5;
+}
+/* Тихий режим системы: планета просто стоит нарисованной. */
+@media (prefers-reduced-motion: reduce) {
+  .globe .wire, .globe .meridian { animation: none; }
 }
 
-.cart-button { position: relative; background: none; border: 0; font-size: 22px; color: var(--fg); padding: 4px; cursor: pointer; }
+/* Имя магазина рядом с планетой набрано каллиграфией, а не разряженными
+   заглавными, как остальные заголовки: на аватарке это росчерк, и в шапке
+   он должен быть росчерком. Шрифт системный — Snell Roundhand стоит на всех
+   айфонах и маках, и это тот же купферплейт, что на логотипе. Где его нет
+   (андроид), остаётся курсивная антиква: не росчерк, но и не гротеск.
+   Родовое семейство `cursive` в стек не берём намеренно: на андроиде оно
+   выдаёт не скрипт, а машинописную антикву — хуже обычного курсива.
+   Своего файла шрифта не заводим — витрина не ходит за шрифтами на чужой
+   домен и открывается на плохой связи.
+
+   Заглавные и разрядку снимаем: каллиграфия строчными и слитно, иначе
+   росчерк рассыпается на буквы. Кегль крупнее — тонкие штрихи при 14px
+   не читаются. */
+.logo h1 {
+  position: relative;  /* поверх планеты, а не под ней */
+  font-family: var(--script);
+  font-style: italic; font-weight: 700; font-size: 31px; line-height: 1;
+  text-transform: none; letter-spacing: 0;
+  /* Планета под буквами смывается белым ореолом, как на аватарке: там линии
+     шара обрываются у росчерка, а не идут сквозь него. Тень белая и в несколько
+     слоёв — одного мало, чтобы стереть волосяную линию у самого штриха. */
+  text-shadow: 0 0 7px var(--bg), 0 0 5px var(--bg), 0 0 3px var(--bg), 0 0 2px var(--bg);
+  /* Поверх планеты и в одну строку. Обрезки по краю нет намеренно: у заглавной
+     «M» росчерк уходит далеко влево за свою коробку, и `overflow: hidden`
+     съедал ему хвост. Слева на этот хвост оставлен отступ, чтобы он не упирался
+     в край экрана. */
+  white-space: nowrap; padding-left: 10px;
+}
+
+/* Плавающая пилюля поверх витрины — на месте, где её ищет рука: там же,
+   где была кнопка «Назад» мессенджера. Отступ считается от `--safe-top`:
+   свои кнопки Telegram рисует поверх витрины, и нажатие в их полосе достаётся
+   мессенджеру, а не нам — кнопка под ними просто не работает. */
+/* Иконки шапки: музыка, связь с продавцом и корзина — одной толщиной линии. */
+.head-actions { display: flex; align-items: center; gap: 14px; }
+.icon-button { position: relative; background: none; border: 0; color: var(--fg); padding: 4px; cursor: pointer; line-height: 0; }
+/* Значок нарисован линиями той же толщины, что параллели на аватарке.
+   Эмодзи-тележка была бы единственным цветным пятном на всей витрине. */
+.icon-button svg { width: 22px; height: 22px; display: block; }
 .cart-count {
-  position: absolute; top: -2px; right: -4px; min-width: 18px; height: 18px;
-  background: var(--accent); color: var(--accent-fg); border-radius: 9px;
-  font-size: 11px; line-height: 18px; text-align: center; padding: 0 5px; font-weight: 600;
+  position: absolute; top: -4px; right: -6px; min-width: 17px; height: 17px;
+  background: var(--accent); color: var(--accent-fg);
+  font-size: 10px; line-height: 17px; text-align: center; padding: 0 5px; font-weight: 700;
+}
+
+/* Выключенная музыка: значок гаснет до цвета подсказок и перечёркивается —
+   у ноты нет второго состояния, по которому видно, играет она или нет. */
+.icon-button.off { color: var(--hint); }
+.icon-button.off::after {
+  content: ""; position: absolute; left: 4px; top: 15px; width: 22px; height: 1px;
+  background: currentColor; transform: rotate(-45deg);
 }
 
 .search {
-  width: 100%; margin: 10px 0 8px; padding: 10px 12px;
+  width: 100%; margin: 12px 0 10px; padding: 11px 12px;
   background: var(--card); color: var(--fg);
   border: 1px solid transparent; border-radius: var(--radius); font-size: 15px;
 }
-.search:focus { outline: none; border-color: var(--accent); }
+.search::placeholder { color: var(--hint); }
+.search:focus { outline: none; border-color: var(--fg); background: var(--bg); }
 
 /* Категории — горизонтальная лента: их бывает восемь, в столбик они съедают экран */
 .chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
 .chips::-webkit-scrollbar { display: none; }
 .chips.wrap { flex-wrap: wrap; overflow: visible; }
 
+/* Чипсы — контурные, выбранный залит чёрным. На белом это читается сразу
+   и не требует ни одного цвета: выбор — это инверсия, а не оттенок. */
 .chip {
-  flex: 0 0 auto; padding: 7px 13px; border-radius: 999px;
-  background: var(--card); color: var(--fg); border: 1px solid transparent;
-  font-size: 14px; cursor: pointer; white-space: nowrap;
+  flex: 0 0 auto; padding: 7px 12px; border-radius: 0;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .1em;
+  cursor: pointer; white-space: nowrap;
 }
-.chip[aria-pressed="true"], .chip.active { background: var(--accent); color: var(--accent-fg); }
-.chip:disabled { opacity: .35; }
-.chip .count { color: var(--hint); font-size: 12px; margin-left: 4px; }
-.chip.active .count { color: var(--accent-fg); opacity: .7; }
+.chip[aria-pressed="true"], .chip.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.chip:disabled { opacity: .3; }
+.chip .count { color: var(--hint); font-size: 10px; margin-left: 5px; }
+.chip.active .count { color: var(--accent-fg); opacity: .6; }
 
-.filter-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
-.filter-button { background: none; border: 0; color: var(--accent); font-size: 14px; padding: 0; cursor: pointer; }
-.filter-button.on::after { content: " ●"; font-size: 10px; vertical-align: middle; }
-.found { color: var(--hint); font-size: 13px; }
+.filter-row { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
+/* Кнопки-ссылки на белом опознаются по подчёркиванию: цвета, которым их
+   обычно выделяют, у магазина нет. */
+.filter-button {
+  background: none; border: 0; color: var(--fg); padding: 0; cursor: pointer;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em;
+  text-decoration: underline; text-underline-offset: 4px;
+}
+.filter-button.on::after { content: " \25CF"; font-size: 9px; vertical-align: middle; }
+.found { color: var(--hint); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; }
 
 /* Витрина: две колонки — привычная сетка магазина на телефоне */
-.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 12px; }
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px 14px; margin-top: 18px; }
 @media (min-width: 560px) { .grid { grid-template-columns: repeat(3, 1fr); } }
 
-.card { background: var(--card); border-radius: var(--radius); overflow: hidden; cursor: pointer; }
+/* Карточка без рамки и без заливки: на белом рамка вокруг каждой вещи
+   превращает витрину в таблицу, а нужен разворот каталога, где границу
+   держит само фото. */
+.card { background: none; cursor: pointer; }
 /* Фото магазина — квадратные (такими их отдаёт Telegram). В сетке допустима
    лёгкая обрезка ради ровных рядов, но не 3:4: тогда у вещи срезает бока. */
-.card-photo { position: relative; aspect-ratio: 4 / 5; background: color-mix(in srgb, var(--hint) 12%, transparent); }
+.card-photo { position: relative; aspect-ratio: 4 / 5; background: var(--card); }
 .card-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.card-photo .stub { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--hint); font-size: 22px; font-weight: 600; letter-spacing: .06em; }
-.card-tag { position: absolute; left: 8px; top: 8px; background: rgba(0,0,0,.6); color: #fff; font-size: 11px; padding: 3px 7px; border-radius: 6px; }
-.card-body { padding: 8px 10px 12px; }
-.card-brand { font-size: 12px; color: var(--hint); text-transform: uppercase; letter-spacing: .04em; }
-.card-name { font-size: 14px; margin: 2px 0 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.card-price { font-size: 15px; font-weight: 600; }
-.card-old-price { font-size: 12px; color: var(--hint); text-decoration: line-through; margin-left: 6px; }
-.card-sizes { margin-top: 6px; font-size: 12px; color: var(--hint); }
+.card-photo .stub { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--hint); font-size: 20px; font-weight: 700; letter-spacing: .12em; }
+.card-tag { position: absolute; left: 0; top: 0; background: var(--accent); color: var(--accent-fg); font-size: 10px; font-weight: 700; letter-spacing: .08em; padding: 4px 7px; }
+.card-body { padding: 10px 0 0; }
+/* Марка — одна строка, имя — ровно две: иначе у короткого названия цена
+   уезжает вверх, и в соседних карточках ряда всё стоит на разной высоте. */
+.card-brand { font-size: 10px; color: var(--hint); text-transform: uppercase; letter-spacing: .14em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-name { font-size: 14px; line-height: 1.3; min-height: 2.6em; margin: 4px 0 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card-price { font-size: 13px; font-weight: 700; letter-spacing: .02em; }
+.card-old-price { font-size: 11px; color: var(--hint); text-decoration: line-through; margin-left: 6px; }
+.card-sizes { margin-top: 6px; font-size: 10px; color: var(--hint); text-transform: uppercase; letter-spacing: .1em; }
 
-.empty { text-align: center; color: var(--hint); margin: 40px 14px; }
+.empty { text-align: center; color: var(--hint); margin: 48px 16px; }
 
 /* Панель фильтров */
-.sheet { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 20; display: flex; align-items: flex-end; }
-.sheet-body { width: 100%; max-height: 85vh; overflow-y: auto; background: var(--bg); border-radius: 18px 18px 0 0; padding: 16px 14px calc(16px + env(safe-area-inset-bottom)); }
-.sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-.filter-block { margin-bottom: 18px; }
-.link { background: none; border: 0; color: var(--accent); font-size: 15px; cursor: pointer; }
-.range { width: 100%; accent-color: var(--accent); }
-.sheet-actions { display: flex; gap: 10px; }
+/* Панель ходит только вверх-вниз: `touch-action` отбирает у браузера боковую
+   протяжку, иначе он сам качает её вслед за пальцем наискось. */
+/* Пока набирают цену, панель кладут на видимую часть страницы (`fitKeyboard`
+   в app.js): position и высота приезжают оттуда, иначе окошко цены оказывается
+   под клавиатурой. Без клавиатуры панель занимает всё окно. */
+.sheet { position: fixed; inset: 0; background: rgba(0, 0, 0, .35); z-index: 20; display: flex; align-items: flex-end; touch-action: pan-y; }
+/* Пока панель открыта, витрина под ней не нажимается. Затемнение перекрывает
+   карточки на глаз, но палец всё равно попадал в товар под ним — и вместо
+   выбора размера покупатель проваливался в чужую вещь. */
+body:has(.sheet:not([hidden])) .screen { pointer-events: none; }
+/* Панель занимает видимое окно, а не 85% от «идеальной» высоты: в Telegram
+   vh считается по всему webview, и нижний край панели — вместе с кнопкой
+   «Показать» — уезжал под край экрана. Отсюда dvh и те же safe area, что
+   у витрины: env() внутри мессенджера приходит нулём. */
+.sheet-body {
+  display: flex; flex-direction: column;
+  width: 100%; max-height: calc(100% - var(--safe-top));
+  background: var(--bg); border-top: 1px solid var(--fg);
+  padding: 18px 16px calc(18px + var(--tg-safe-area-inset-bottom, 0px));
+}
+/* `overflow-y: auto` сам по себе делает и поперечную прокрутку тоже: у второй
+   оси вычисленное значение становится `auto`, и панель настроек оттягивалась
+   вбок от любого чипа, который не влез в строку. Здесь ходят только вверх
+   и вниз. */
+.sheet-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.filter-block { margin-bottom: 20px; }
+.link {
+  background: none; border: 0; color: var(--fg); cursor: pointer;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em;
+  text-decoration: underline; text-underline-offset: 4px;
+}
+.range { display: block; width: 100%; accent-color: var(--fg); }
+.range + .range { margin-top: 8px; }
+.price-fields { flex-direction: row; gap: 10px; margin: 0 0 12px; }
+.price-fields label { flex: 1; min-width: 0; }
+.sheet-actions { display: flex; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
 
-.button { flex: 1; padding: 13px; border: 0; border-radius: var(--radius); background: var(--accent); color: var(--accent-fg); font-size: 15px; font-weight: 600; cursor: pointer; }
-.button.ghost { background: var(--card); color: var(--fg); }
+/* Язычок с уголком у верхней кромки клавиатуры. Лежит в самой панели, а нижний
+   край панели во время набора и есть кромка клавиатуры, — своей мерки язычку
+   не нужно. Справа — там, где палец и так стоит после набора цифр. */
+.kbd-hide {
+  position: absolute; right: 0; bottom: 0; z-index: 25;
+  display: flex; align-items: center; justify-content: center;
+  width: 56px; height: 30px; padding: 0;
+  border: 1px solid var(--fg); border-right: 0; border-bottom: 0;
+  border-radius: 10px 0 0 0;
+  background: var(--bg); color: var(--fg); cursor: pointer;
+}
+.kbd-hide svg { width: 22px; height: 9px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+.button {
+  flex: 1; padding: 14px 10px; border: 1px solid var(--accent); border-radius: var(--radius);
+  background: var(--accent); color: var(--accent-fg); cursor: pointer;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .14em;
+}
+.button.ghost { background: var(--bg); color: var(--fg); border-color: var(--fg); }
 
 /* Карточка товара */
-.gallery { display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory; margin: 0 -14px; padding: 0 14px; scrollbar-width: none; }
+.gallery { display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory; margin: 0 -16px; padding: 0 16px; scrollbar-width: none; }
 .gallery::-webkit-scrollbar { display: none; }
 /* Фото вещи показывается целиком (contain), а не обрезается: покупатель должен
    видеть вещь, а не её середину. Высота ограничена, иначе на телефоне картинка
@@ -132,65 +381,314 @@ h3 { font-size: 13px; margin: 0 0 8px; color: var(--hint); font-weight: 600; tex
   height: min(46vh, 84vw); aspect-ratio: 1 / 1; width: auto;
   object-fit: contain; border-radius: var(--radius); background: var(--card);
 }
-.gallery .stub { display: flex; align-items: center; justify-content: center; color: var(--hint); font-size: 28px; font-weight: 600; }
+.gallery .stub { display: flex; align-items: center; justify-content: center; color: var(--hint); font-size: 26px; font-weight: 700; letter-spacing: .12em; }
 /* Точки под фото: без них не видно, что снимков несколько и они листаются */
-.dots { display: flex; gap: 6px; justify-content: center; margin-top: 10px; min-height: 6px; }
-.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--hint); opacity: .35; transition: opacity .15s; }
+.dots { display: flex; gap: 6px; justify-content: center; margin-top: 12px; min-height: 5px; }
+.dot { width: 5px; height: 5px; background: var(--fg); opacity: .2; transition: opacity .15s; }
 .dot.active { opacity: 1; }
 
-.product-body { padding: 16px 0 0; }
-.brand { color: var(--hint); text-transform: uppercase; letter-spacing: .05em; font-size: 13px; margin: 0; }
-.product-name { font-size: 20px; margin: 4px 0 10px; }
-.price-row { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
-.price { font-size: 20px; font-weight: 700; }
-.old-price { color: var(--hint); text-decoration: line-through; font-size: 14px; }
-.badge { font-size: 12px; color: var(--hint); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; }
-.description { white-space: pre-line; margin: 0 0 18px; }
+/* Карточка занимает экран целиком, а её разделы расходятся по высоте поровну.
+   Так текст и знак марки у любой вещи заканчиваются на одной линии над кнопкой:
+   раньше высоту задавала длина названия и описания, и низ карточки гулял от
+   вещи к вещи на добрую сотню точек. Разница между вещами теперь уходит
+   в промежутки между разделами, где она не бросается в глаза. */
+#screen-product {
+  display: flex; flex-direction: column;
+  min-height: calc(100dvh - 96px - var(--tg-safe-area-inset-bottom, 0px));
+}
+/* Ещё эта коробка — точка отсчёта для знака марки: он висит в её правом нижнем
+   углу, не занимая места в потоке. */
+.product-body {
+  position: relative; flex: 1;
+  display: flex; flex-direction: column; justify-content: space-between;
+  gap: 14px; padding: 20px 0 6px;
+}
+.product-head { display: flex; flex-direction: column; gap: 8px; }
+.brand { color: var(--hint); text-transform: uppercase; letter-spacing: .16em; font-size: 11px; font-weight: 600; margin: 0; }
+.product-name { font-family: var(--serif); font-size: 26px; font-weight: normal; line-height: 1.25; margin: 0; }
+.price-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0; }
+.price { font-size: 18px; font-weight: 700; letter-spacing: .02em; }
+.old-price { color: var(--hint); text-decoration: line-through; font-size: 13px; }
+.badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; color: var(--fg); border: 1px solid var(--line); padding: 4px 8px; }
+.description { white-space: pre-line; margin: 0; }
 .note { color: var(--hint); font-size: 13px; }
 
+/* Размеры делят низ карточки со знаком марки, поэтому им оставлена ширина,
+   свободная от него: лишние переносятся строкой ниже, а не ложатся на логотип.
+   У обуви размеров четыре, и в одну строку последние уезжали прямо под знак. */
+#product-sizes { padding-right: 46%; }
+
+/* Логотип марки в пустом правом боку карточки, вровень с последней строкой
+   текста. Лежит поверх, а не в потоке: это украшение, и высоту карточки оно
+   менять не должно — иначе у вещей с коротким описанием карточка тянется вниз,
+   а фотография уезжает.
+
+   Логотипы лежат файлами в `webapp/brands/` по имени марки (`stone-island.svg`,
+   `bape.png`). Нет файла — витрина подписывает марку словом (`.mark-text`):
+   ассортимент секонда меняется быстрее, чем находятся логотипы, и вещь
+   незнакомой марки должна выглядеть законченной.
+
+   Обесцвечены и приглушены: у витрины нет ни одного цвета, а оранжевый
+   Carhartt или коричневая обезьяна BAPE в полную силу перетянули бы внимание
+   с фотографии вещи. */
+.mark {
+  position: absolute; right: 0; bottom: 0; width: 46%; height: 84px;
+  display: flex; justify-content: flex-end; align-items: center; pointer-events: none;
+}
+/* Высоту знака считает app.js по его же пропорциям, а коробка одна на все марки
+   и знак в ней по центру: так у квадратного компаса и у ниточной надписи Ralph
+   Lauren середина оказывается на одной высоте, и карточка не «прыгает» от вещи
+   к вещи. По нижнему краю равнять нельзя — высокий знак лез бы в описание. */
+.mark img { max-width: 100%; max-height: 100%; object-fit: contain; filter: grayscale(1); opacity: .3; }
+
+/* Подпись словом вместо логотипа — тем же разряженным гротеском, что и всё
+   остальное в витрине. */
+.mark-text {
+  align-self: flex-end; text-align: right;
+  font-size: clamp(13px, 5vw, 20px); font-weight: 700; line-height: 1.1;
+  text-transform: uppercase; letter-spacing: .1em; color: #e2e2e2; overflow-wrap: anywhere;
+}
+
+/* У каждой марки своё движение, по тому, что нарисовано в самом знаке: компас
+   Stone Island крутится, профиль Карла Лагерфельда поворачивается вокруг своей
+   оси, поло-пони Ralph Lauren идёт галопом, обезьяна BAPE кивает, полосы Alpha
+   Industries едут, готические буквы Palm Angels качаются, крючок Carhartt висит
+   и качается, как бирка. Остальные просто дышат. Движение выбирается в app.js.
+
+   Цикл движения — два такта песни (`--beat` ставит app.js по темпу трека,
+   вдвое медленнее листания снимков): знак покачивается в ту же долю, но не
+   мельтешит наравне с фотографиями. Компас крутится за четыре таких цикла —
+   оборот в шесть секунд был бы вертолётом, а не украшением.
+
+   Появление не анимируется намеренно: знак живёт на прозрачности .3, и любая
+   анимация «из нуля» означала бы, что при остановленных анимациях (тихий
+   режим, экономия батареи, старый вебвью) логотипа не видно вовсе. */
+.mark .spin    { animation: mark-spin calc(var(--beat) * 4) linear infinite; }
+.mark .turn    { animation: mark-turn calc(var(--beat) * 2) ease-in-out infinite; }
+.mark .trot    { animation: mark-trot var(--beat) ease-in-out infinite; }
+.mark .bob     { animation: mark-bob var(--beat) ease-in-out infinite; }
+.mark .drift   { animation: mark-drift var(--beat) ease-in-out infinite; }
+.mark .sway    { animation: mark-sway var(--beat) ease-in-out infinite; }
+.mark .swing   { animation: mark-swing var(--beat) ease-in-out infinite; transform-origin: 50% 0; }
+.mark .breathe { animation: mark-breathe var(--beat) ease-in-out infinite; }
+
+@keyframes mark-spin { to { transform: rotate(360deg); } }
+/* Оборот вокруг своей оси: профиль Карла отворачивается и возвращается. */
+@keyframes mark-turn { to { transform: perspective(300px) rotateY(360deg); } }
+/* Шаг лошади: два толчка за цикл, с лёгким креном, как в галопе. */
+@keyframes mark-trot {
+  25% { transform: translateY(-6px) rotate(-2deg); }
+  50% { transform: none; }
+  75% { transform: translateY(-4px) rotate(2deg); }
+}
+@keyframes mark-bob { 50% { transform: translateY(-7px); } }
+@keyframes mark-drift { 50% { transform: translateX(-9px); } }
+@keyframes mark-sway { 25% { transform: rotate(-2.5deg); } 75% { transform: rotate(2.5deg); } }
+/* Крючок Carhartt висит на верхней точке и качается, как бирка на вещи. */
+@keyframes mark-swing { 25% { transform: rotate(-7deg); } 75% { transform: rotate(7deg); } }
+@keyframes mark-breathe { 50% { opacity: .5; } }
+
+/* Кому анимации мешают, тому остаётся просто бледный знак. */
+@media (prefers-reduced-motion: reduce) {
+  .mark img { animation: none; }
+}
+
 /* Корзина */
-.cart-items { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
-.cart-item { display: flex; gap: 12px; background: var(--card); border-radius: var(--radius); padding: 10px; align-items: center; }
-.cart-item img, .cart-item .stub { width: 64px; height: 84px; object-fit: cover; border-radius: 8px; flex: 0 0 auto; background: color-mix(in srgb, var(--hint) 12%, transparent); }
-.cart-item .stub { display: flex; align-items: center; justify-content: center; color: var(--hint); font-weight: 600; }
+.cart-items { display: flex; flex-direction: column; margin-top: 16px; }
+/* Строки корзины разделены линейкой, а не карточками: список счёта, а не сетка. */
+.cart-item { display: flex; gap: 14px; padding: 14px 0; align-items: center; border-bottom: 1px solid var(--line); }
+.cart-item img, .cart-item .stub { width: 60px; height: 76px; object-fit: cover; flex: 0 0 auto; background: var(--card); }
+.cart-item .stub { display: flex; align-items: center; justify-content: center; color: var(--hint); font-weight: 700; }
 .cart-item-body { flex: 1; min-width: 0; }
 .cart-item-title { font-size: 14px; }
-.cart-item-meta { color: var(--hint); font-size: 12px; margin-top: 2px; }
+.cart-item-meta { color: var(--hint); font-size: 11px; margin-top: 4px; text-transform: uppercase; letter-spacing: .08em; }
 .cart-remove { background: none; border: 0; color: var(--hint); font-size: 20px; cursor: pointer; padding: 4px 6px; }
-.total-row { display: flex; justify-content: space-between; align-items: baseline; margin: 18px 2px; font-size: 15px; }
-.total { font-size: 20px; font-weight: 700; }
+.total-row { display: flex; justify-content: space-between; align-items: baseline; margin: 22px 0; font-size: 11px; text-transform: uppercase; letter-spacing: .14em; font-weight: 700; }
+.total { font-size: 20px; font-weight: 700; letter-spacing: 0; }
 
 /* Оформление */
-.form { display: flex; flex-direction: column; gap: 14px; margin-top: 12px; }
-.form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--hint); }
+.form { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
+.form label { display: flex; flex-direction: column; gap: 7px; font-size: 10px; color: var(--hint); text-transform: uppercase; letter-spacing: .14em; font-weight: 700; }
 .form input, .form select, .form textarea {
   background: var(--card); color: var(--fg); border: 1px solid transparent;
-  border-radius: var(--radius); padding: 11px 12px; font-size: 15px; font-family: inherit;
+  border-radius: var(--radius); padding: 12px; font-size: 15px; font-family: inherit;
+  text-transform: none; letter-spacing: normal; font-weight: normal;
+  /* Каретка и выделение — своими руками: клиент Telegram запрещает выделение
+     текста на всей странице, и запрет достаётся полям ввода. Набранная цена
+     без каретки не видна вовсе — непонятно, в какое из двух окошек идут цифры
+     и куда встанет следующая. */
+  -webkit-user-select: text; user-select: text;
+  caret-color: var(--fg); cursor: text;
 }
-.form input:focus, .form select:focus, .form textarea:focus { outline: none; border-color: var(--accent); }
-.form input:invalid:not(:placeholder-shown) { border-color: #e05b5b; }
+.form ::placeholder { color: var(--hint); }
+.form input:focus, .form select:focus, .form textarea:focus { outline: none; border-color: var(--fg); background: var(--bg); }
+/* Ошибку в поле показываем пунктиром, а не красным: цвета у магазина нет,
+   а от рамки фокуса пунктир отличается с одного взгляда. */
+.form input:invalid:not(:placeholder-shown) { border-color: var(--fg); border-style: dashed; }
 
-.done-mark { font-size: 44px; margin: 0; color: var(--accent); }
+.done-mark { font-size: 40px; margin: 0; color: var(--fg); }
 
 /* Фото на весь экран: в секонде решает деталь — шов, бирка, потёртость,
    а в карточке снимок помещается только целиком и мелко. Листается тем же
-   snap-скроллом, что и галерея: один жест, выученный на витрине. */
-.viewer { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; padding: 0; border: 0; background: #000; overflow: hidden; }
-.viewer::backdrop { background: #000; }
+   snap-скроллом, что и галерея: один жест, выученный на витрине.
+   Подложка белая, как и вся витрина: вещи сняты на светлом, и чёрный экран
+   вокруг них выглядел бы дырой посреди магазина. */
+.viewer { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; padding: 0; border: 0; background: var(--bg); overflow: hidden; }
+.viewer::backdrop { background: var(--bg); }
 .viewer-strip { display: flex; height: 100%; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
 .viewer-strip::-webkit-scrollbar { display: none; }
 .viewer-strip img { flex: 0 0 100%; width: 100%; height: 100%; object-fit: contain; scroll-snap-align: center; }
+/* Увеличенный снимок остаётся на экране один: соседи по полосе прячутся.
+   Не ради красоты — на айфоне их край проступал в углу поверх зума. */
+.viewer-strip.zooming img { visibility: hidden; }
+.viewer-strip.zooming img.zoomed { visibility: visible; }
 /* Крестик поверх снимка: тап по самому фото занят зумом, и выход должен быть
-   виден, а не угадываться. Отступ сверху — под чёлку и шапку Telegram. */
+   виден, а не угадываться. Внизу, а не вверху: наверху мессенджер рисует свой
+   «✕ Закрыть» поверх витрины, и палец, целясь в наш крестик, попадал в него —
+   вместо фото закрывался весь магазин. Снизу Telegram не рисует ничего,
+   а кнопка «В корзину» на время просмотра спрятана. */
 .viewer-close {
-  position: fixed; top: calc(var(--tg-safe-area-inset-top, 0px) + 8px); left: 14px;
-  width: 36px; height: 36px; border: 0; border-radius: 50%;
-  background: rgba(0,0,0,.5); color: #fff; font-size: 22px; line-height: 1; cursor: pointer;
+  position: fixed; bottom: calc(var(--tg-safe-area-inset-bottom, 0px) + 24px);
+  left: 50%; transform: translateX(-50%);
+  width: 34px; height: 34px; border: 1px solid var(--fg); border-radius: 0;
+  background: rgba(255, 255, 255, .9); color: var(--fg); font-size: 20px; line-height: 1; cursor: pointer;
 }
 .gallery img { cursor: zoom-in; }
 
 .toast {
   position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%);
-  background: rgba(0,0,0,.85); color: #fff; padding: 10px 16px; border-radius: 10px;
-  font-size: 14px; z-index: 30; max-width: 90vw; text-align: center;
+  background: var(--fg); color: var(--bg); padding: 11px 18px; border: 0;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
+  z-index: 30; max-width: 90vw; text-align: center;
+}
+
+/* --- Экран загрузки ---------------------------------------------------------
+
+   Заставка не ждёт каталог молча, а собирает знак магазина на глазах. Сперва
+   по табло проносятся марки, но меняются не слова целиком, а буквы: волна идёт
+   слева направо, а буквы для перебора берутся из самих названий марок — имя
+   магазина складывается из того, что лежит в каталоге. Последняя надпись —
+   уже логотип: вокруг неё прорисовывается планета, и собранный знак уезжает
+   в шапку, на своё постоянное место. Имена живые, поэтому заставка у каждого
+   магазина своя и не устаревает вместе с ассортиментом. */
+
+/* Касания заставка забирает себе и никуда не пускает: пока знак собирается,
+   витрина под ней уже нарисована, и тап по невидимой карточке открывал бы
+   товар из-под заставки. Слой снимается ровно тогда, когда знак доехал
+   в шапку, — до этого витрина не отвечает ни на что. */
+#boot {
+  position: fixed; inset: 0; z-index: 110; background: var(--bg);
+  display: grid; place-items: center;
+  color: var(--fg); opacity: 1;
+  /* Гаснет только фон, а не заставка целиком: знак на ней в это время летит
+     в шапку и пропадать не должен ни на кадр. */
+  transition: opacity .45s linear, background-color .5s linear;
+  /* Витрина включается, как старый телевизор: луч раскрывается точкой в линию
+     поперёк экрана, а из линии — в кадр. Раскрывается именно заставка, потому
+     что заставка и есть весь экран: всё остальное лежит под ней и появляется
+     разом, когда кадр раскрылся. Без `fill-mode`: после включения преобразования
+     на слое не остаётся вовсе, иначе `scale(1,1)` навсегда делает заставку
+     точкой отсчёта для того, что внутри неё летит в шапку. */
+  animation: crt-on 660ms;
+}
+
+@keyframes crt-on {
+  0%   { transform: scale(.06, .005); animation-timing-function: cubic-bezier(.2, .85, .3, 1) }
+  22%  { transform: scale(1, .005); animation-timing-function: linear }
+  36%  { transform: scale(1, .005); animation-timing-function: cubic-bezier(.3, .85, .25, 1) }
+  100% { transform: scale(1, 1) }
+}
+
+/* Коробка знака — это коробка планеты, даже пока планеты нет: надпись
+   центрируется по ней с первого кадра и не прыгает, когда планета появится.
+   Она же уезжает в шапку целиком, поэтому размер держим равным размеру
+   планеты — перелёт считается по этой коробке и иначе промахнётся. */
+#boot-logo {
+  /* Кегль собранного знака: им же меряется, до чего дорастают кривые. Знак
+     относится к планете ровно так же, как в шапке (31px имени на 52px
+     планеты), и это не украшательство: в конце заставки знак уезжает в шапку
+     одним куском, и при другой пропорции буквы приезжают туда не своего
+     кегля — мелкие гаснут, а на их месте проявляются крупные из шапки, будто
+     знак на мгновение пропал. Хвост «M» при этом вылезает за круг, как и на
+     самом логотипе, — отсюда `overflow: visible` у знака. */
+  --globe-size: min(52vw, 210px);
+  --mark-size: calc(var(--globe-size) * 31 / 52);
+  position: relative; width: var(--globe-size); aspect-ratio: 1;
+  transition: transform 1s cubic-bezier(.65, 0, .3, 1);
+}
+#boot-logo .globe { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+/* Надпись лежит поверх планеты, как на аватарке: планета крутится, буквы стоят.
+   Ширина больше планеты — длинная марка переносится, а не распирает экран. */
+#boot-brand {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(92vw, 460px); text-align: center; overflow-wrap: anywhere;
+  font-size: clamp(15px, 5.5vw, 30px); font-weight: 700; line-height: 1.25;
+  text-transform: uppercase; letter-spacing: .14em;
+  /* Пробелы по краям не схлопываются: табло держит постоянную ширину, и буквы
+     имени стоят в одной и той же точке, пока вокруг мелькают марки. */
+  white-space: pre-wrap; color: var(--hint);
+}
+/* Выцепленные буквы — те, что остаются: чёрные среди серых марок и тем же
+   шрифтом, что и марки. Росчерком они станут потом, когда соберутся все. */
+#boot-brand b { color: var(--fg); font-weight: inherit; }
+/* Собранное имя не сменяется знаком, а превращается в него. Шрифт в шрифт
+   браузер перетекать не умеет: в момент, когда имя собрано, текст подменяется
+   его же контурами (`wordmark.js`, те же буквы тем же кеглем на том же месте —
+   подмена не видна ни одним пикселем), и дальше эти контуры точка в точку едут
+   в контуры росчерка. Буквы при этом никуда не деваются: одна форма перетекает
+   в другую, как и просили. */
+/* Замещаемому элементу `inset: 0` размера не даёт — ширину и высоту
+   приходится задавать явно, иначе svg остаётся 300×150 по умолчанию. */
+#boot-mark { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; fill: var(--fg); }
+/* Под буквами планета смыта белым, как на аватарке и как в шапке: белая
+   обводка кладётся под заливку (`paint-order`), поэтому саму букву она не
+   ест — только обрывает линии шара у штриха. Толщина в экранных пикселях
+   (`non-scaling-stroke`): знак по дороге ужимается вчетверо, а ореол должен
+   остаться таким же, как у надписи в шапке. */
+#boot-mark path, #head-mark path {
+  fill: var(--fg); stroke: var(--bg); stroke-width: .04;
+  paint-order: stroke fill;
+}
+
+/* Знак в шапке — те же кривые, что собрались на заставке (строит `app.js`).
+   Живая надпись под ним остаётся в разметке, но не рисуется: другой отрисовкой
+   того же имени знак в углу выглядел подменённым. */
+#head-mark { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; }
+.logo.marked h1 { color: transparent; text-shadow: none; }
+
+/* Запасной путь: имя магазина не то, для которого сгенерированы контуры
+   (`SHOP_NAME` в настройках у каждого свой). Тогда шрифт просто меняется —
+   без превращения, но и без пустого места. */
+#boot-brand.script {
+  font-family: var(--script); font-style: italic;
+  font-size: var(--mark-size); letter-spacing: 0;
+}
+
+/* Выцепленные и собранные буквы — строчными, как в самом знаке: заглавные
+   пришлось бы менять на строчные посреди превращения, а это уже подмена. */
+#boot-brand b, #boot-brand i { text-transform: none; color: var(--fg); }
+#boot-brand i { display: inline-block; font-style: normal; }
+
+/* «worldwide» — под планетой, как на самом логотипе, а не сбоку от неё:
+   без своего места span вставал инлайном в левый верхний угол коробки знака.
+   Появляется вместе с собранным именем и гаснет, когда знак улетает в шапку:
+   там его нет. Отступ строки справа компенсирует разрядку последней буквы —
+   иначе надпись стоит чуть левее середины. */
+#boot-tag {
+  position: absolute; left: 50%; top: 100%; transform: translateX(-50%);
+  margin-top: 20px; white-space: nowrap;
+  font-size: clamp(11px, 3.4vw, 15px); font-weight: 700;
+  text-transform: uppercase; letter-spacing: .3em; text-indent: .3em;
+  color: var(--fg); opacity: 0; transition: opacity .5s linear;
+}
+#boot-logo.named #boot-tag { opacity: 1; }
+
+/* Табло мелькает быстро — тому, кто выключил анимации в системе, оно не нужно.
+   Таймеры в app.js при этом отработают вхолостую и сами его уберут. */
+@media (prefers-reduced-motion: reduce) {
+  /* Невидимый слой не должен ловить касания: заставки на экране нет, а
+     витрина есть, и трогать её нужно сразу. Кинескоп тоже не зажигаем —
+     витрина просто есть с первого кадра (класс `lit` app.js вешает сразу). */
+  #boot { opacity: 0; pointer-events: none; animation: none; }
 }

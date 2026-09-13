@@ -23,6 +23,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 DATA = ROOT / "data"
 PHOTOS = DATA / "photos"
+# Присланный владельцем трек лежит в data/, а не в webapp/: выкладка
+# затирает webapp/ целиком, и песня уезжала бы при каждом deploy.sh.
+MUSIC = DATA / "music"
 DB_FILE = DATA / "shop.db"
 WEBAPP = ROOT / "webapp"
 

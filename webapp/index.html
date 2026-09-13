@@ -4,24 +4,81 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Магазин</title>
-  <!-- Единственный внешний скрипт: SDK мини-приложений Telegram.
-       Всё остальное лежит рядом, чтобы витрина открывалась и на плохой связи. -->
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="styles.css">
+  <!-- SDK мини-приложений Telegram лежит рядом, а не грузится с telegram.org:
+       сам домен у российских операторов заблокирован, и скрипт в <head> вешал
+       разбор страницы до таймаута — витрина не открывалась ни у кого, кроме
+       владельца с включённым VPN. Копия обновляется руками, когда в Bot API
+       появится нужный метод. Внешних адресов у витрины больше нет.
+       defer у обоих скриптов: порядок они сохраняют, но разбор страницы больше
+       не стоит и не ждёт, пока приедут 116 КБ SDK. На рваном канале заставка
+       успевает нарисоваться, а скрипты едут параллельно, а не друг за другом. -->
+  <script defer src="telegram-web-app.js?v=76"></script>
+  <!-- ?v= меняется вместе с правкой: клиент Telegram (особенно на компьютере)
+       держит старые css и js даже при Cache-Control: no-cache, и владелец
+       видит вчерашнюю витрину, решая, что ничего не починилось. -->
+  <link rel="stylesheet" href="styles.css?v=76">
 </head>
 <body>
-  <!-- Своя кнопка возврата: в полноэкранном режиме шапки Telegram нет,
-       а с ней нет и кнопки «Назад» мессенджера. -->
-  <button id="back-button" class="back-button" type="button" hidden>‹ Назад</button>
-
   <div id="screen-catalog" class="screen">
     <header class="head">
       <div class="head-row">
-        <h1 id="shop-name">Магазин</h1>
-        <button id="cart-button" class="cart-button" type="button" aria-label="Корзина">
-          <span class="cart-icon">🛒</span>
-          <span id="cart-count" class="cart-count" hidden>0</span>
-        </button>
+        <div class="logo">
+          <!-- Планета с логотипа — разметкой, а не картинкой в <img>: заставка
+               берёт с неё копию, и копия потом сама встаёт сюда, на своё
+               постоянное место (`app.js`). Почему не файл — у `.globe`
+               в styles.css. Материки рисует витрина: берега лежат на шаре
+               и едут вместе с ним (`land.js`). -->
+          <svg class="globe" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+            <!-- Ось наклонена, как на логотипе: земной шар, а не мяч. -->
+            <g transform="rotate(9 50 50)">
+              <!-- Параллели стоят: при вращении вокруг своей оси они не меняются. -->
+              <ellipse class="wire" cx="50" cy="50" rx="44" ry="5.5"/>
+              <ellipse class="wire" cx="50" cy="27" rx="37.5" ry="4.4" style="animation-delay: .22s"/>
+              <ellipse class="wire" cx="50" cy="73" rx="37.5" ry="4.4" style="animation-delay: .22s"/>
+              <ellipse class="wire" cx="50" cy="12" rx="21" ry="2.4" style="animation-delay: .42s"/>
+              <ellipse class="wire" cx="50" cy="88" rx="21" ry="2.4" style="animation-delay: .42s"/>
+              <!-- Меридианы: каждый эллипс — меридиан вместе со своим антиподом.
+                   Две задержки: первая ведёт волну прорисовки, вторая
+                   отрицательная — сдвиг фазы вращения, чтобы шли не строем. -->
+              <ellipse class="wire meridian" cx="50" cy="50" rx="44" ry="44" style="animation-delay: .58s, 0s"/>
+              <ellipse class="wire meridian" cx="50" cy="50" rx="38" ry="44" style="animation-delay: .64s, -1.67s"/>
+              <ellipse class="wire meridian" cx="50" cy="50" rx="22" ry="44" style="animation-delay: .7s, -3.33s"/>
+              <ellipse class="wire meridian" cx="50" cy="50" rx="0" ry="44" style="animation-delay: .76s, -5s"/>
+              <ellipse class="wire meridian" cx="50" cy="50" rx="22" ry="44" style="animation-delay: .82s, -6.67s"/>
+              <ellipse class="wire meridian" cx="50" cy="50" rx="38" ry="44" style="animation-delay: .88s, -8.33s"/>
+              <!-- Контур последним: планета замыкается, когда сетка уже стоит. -->
+              <circle class="wire" cx="50" cy="50" r="44" style="animation-delay: .95s"/>
+              <path class="land"/>
+            </g>
+          </svg>
+          <h1 id="shop-name">Магазин</h1>
+        </div>
+        <div class="head-actions">
+          <!-- Музыка выключается там же, где корзина и связь с продавцом:
+               одной толщиной линии и на одной полке, а не своей кнопкой
+               поверх витрины. -->
+          <button id="sound" class="icon-button" type="button" aria-label="Музыка" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <path d="M9 17V4l11-2v13"/>
+              <circle cx="6" cy="17" r="3"/><circle cx="17" cy="15" r="3"/>
+            </svg>
+          </button>
+          <!-- Связь с продавцом — его личка в Telegram, а не своя переписка
+               в витрине: там уже есть история, фото и уведомления. Кнопка
+               открывает чат с владельцем и сворачивает витрину. -->
+          <button id="contact" class="icon-button" type="button" aria-label="Написать продавцу">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <path d="M3 4h18v12H10l-5 4v-4H3z"/>
+            </svg>
+          </button>
+          <button id="cart-button" class="icon-button" type="button" aria-label="Корзина">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <path d="M2 3h3l2.6 11.2a1.6 1.6 0 0 0 1.6 1.3h8.4a1.6 1.6 0 0 0 1.6-1.3L21 7H6"/>
+              <circle cx="10" cy="20" r="1.3"/><circle cx="18" cy="20" r="1.3"/>
+            </svg>
+            <span id="cart-count" class="cart-count" hidden>0</span>
+          </button>
+        </div>
       </div>
       <input id="search" class="search" type="search" placeholder="Поиск: бренд, вещь, цвет" autocomplete="off">
       <nav id="categories" class="chips" aria-label="Категории"></nav>
@@ -42,39 +99,61 @@
         <h2>Фильтры</h2>
         <button id="filters-close" class="link" type="button">Закрыть</button>
       </div>
-      <section class="filter-block">
-        <h3>Бренд</h3>
-        <div id="filter-brands" class="chips wrap"></div>
-      </section>
-      <section class="filter-block">
-        <h3>Размер</h3>
-        <div id="filter-sizes" class="chips wrap"></div>
-      </section>
-      <section class="filter-block">
-        <h3>Состояние</h3>
-        <div id="filter-condition" class="chips wrap">
-          <button class="chip" data-condition="" type="button">Любое</button>
-          <button class="chip" data-condition="new" type="button">Новое</button>
-          <button class="chip" data-condition="used" type="button">Б/у</button>
-        </div>
-      </section>
-      <section class="filter-block">
-        <h3>Цена до <span id="price-value"></span></h3>
-        <input id="filter-price" class="range" type="range" min="0" max="100000" step="1000">
-      </section>
+      <!-- Прокручивается только середина: заголовок и кнопки «Сбросить/Показать»
+           стоят на месте, иначе на телефоне панель открывается так, что кнопки
+           оказываются за нижним краем экрана и их надо искать прокруткой. -->
+      <div class="sheet-scroll">
+        <section class="filter-block">
+          <h3>Бренд</h3>
+          <div id="filter-brands" class="chips wrap"></div>
+        </section>
+        <section class="filter-block">
+          <h3>Размер</h3>
+          <div id="filter-sizes" class="chips wrap"></div>
+        </section>
+        <section class="filter-block">
+          <h3>Состояние</h3>
+          <div id="filter-condition" class="chips wrap">
+            <button class="chip" data-condition="" type="button">Любое</button>
+            <button class="chip" data-condition="new" type="button">Новое</button>
+            <button class="chip" data-condition="used" type="button">Б/у</button>
+          </div>
+        </section>
+        <section class="filter-block">
+          <h3>Цена</h3>
+          <!-- Ползунок ставит цену на глаз, окошко — точно: порог вроде 12 500
+               шагом в тысячу не поймать, а покупатель думает именно порогами. -->
+          <div class="form price-fields">
+            <label>От<input id="price-min" type="number" inputmode="numeric" enterkeyhint="done" min="0" placeholder="0"></label>
+            <label>До<input id="price-max" type="number" inputmode="numeric" enterkeyhint="done" min="0"></label>
+          </div>
+          <input id="filter-price-min" class="range" type="range" min="0" max="100000" step="1000" aria-label="Цена от">
+          <input id="filter-price-max" class="range" type="range" min="0" max="100000" step="1000" aria-label="Цена до">
+        </section>
+      </div>
       <div class="sheet-actions">
         <button id="filters-reset" class="button ghost" type="button">Сбросить</button>
         <button id="filters-apply" class="button" type="button">Показать</button>
       </div>
     </div>
+    <!-- Стрелка над цифровой клавиатурой: у неё нет своего «готово», и убрать её
+         можно было только тычком мимо окошка. Стрелка отменяет набранное и
+         возвращает цену к той, что стояла при открытии фильтра; Enter, наоборот,
+         принимает. Стоит по нижней кромке панели, а панель во время набора
+         лежит ровно над клавиатурой. -->
+    <button id="kbd-hide" class="kbd-hide" type="button" hidden aria-label="Убрать клавиатуру">
+      <svg viewBox="0 0 24 10" aria-hidden="true"><path d="M2 2.5 12 7.5 22 2.5"/></svg>
+    </button>
   </div>
 
   <div id="screen-product" class="screen" hidden>
     <div id="gallery" class="gallery"></div>
     <div id="gallery-dots" class="dots"></div>
     <div class="product-body">
-      <p id="product-brand" class="brand"></p>
-      <h2 id="product-name" class="product-name"></h2>
+      <div class="product-head">
+        <p id="product-brand" class="brand"></p>
+        <h2 id="product-name" class="product-name"></h2>
+      </div>
       <p class="price-row">
         <span id="product-price" class="price"></span>
         <span id="product-old-price" class="old-price"></span>
@@ -86,6 +165,10 @@
         <div id="product-sizes" class="chips wrap"></div>
       </div>
       <p id="product-note" class="note"></p>
+      <!-- Знак марки лежит поверх пустого бока карточки и в поток не входит:
+           это украшение, а не продолжение описания, и высоту карточки оно
+           менять не должно. -->
+      <div id="product-mark" class="mark" aria-hidden="true"></div>
     </div>
   </div>
 
@@ -138,6 +221,60 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="app.js"></script>
+
+  <!-- Заставка видна с первого кадра: это и есть экран загрузки. Знак магазина
+       собирается на ней с нуля — сначала буквы, потом планета вокруг них.
+       Планету вставляет app.js: копия из шапки, прорисовка которой начинается
+       в тот момент, когда копия появляется в разметке. -->
+  <div id="boot" aria-hidden="true">
+    <div id="boot-logo">
+      <span id="boot-brand"></span>
+      <span id="boot-tag">worldwide</span>
+    </div>
+  </div>
+
+  <!-- Трек целиком, как на awge.com, а не короткий луп: у витрины должен быть
+       саундтрек, а не рингтон. preload="none" — 2.7 МБ не должны конкурировать
+       за канал с фотографиями вещей. Файл начинает подтягиваться с первого
+       касания витрины и играет с первых килобайт, не дожидаясь конца загрузки. -->
+  <!-- Плейлист приезжает с каталогом (`/api/catalog` → `music`) и ставится
+       из app.js: песен несколько, порядок у каждого открытия свой. Без `loop` —
+       иначе конец песни не наступает и следующая не начинается. Играть витрина
+       начинает по вчерашнему списку из localStorage, не дожидаясь каталога:
+       музыка нужна с первого кадра заставки (`MUSIC_KEY` в app.js). -->
+  <!-- Дорожек две: следующая песня начинает звучать, пока предыдущая ещё
+       затихает. На одном элементе смена src — это дырка тишины на загрузку,
+       и никакого перехода не выходит. Какая из двух играет сейчас, знает
+       app.js (`audio()`); вторая в это время подтягивает следующую. -->
+  <audio id="music" preload="none"></audio>
+  <audio id="music-b" preload="none"></audio>
+
+  <!-- Контуры имени двумя шрифтами: по ним заставка превращает буквы
+       гротеска в росчерк. Генерируется `python3 tools/wordmark.py`. -->
+  <!-- Берега материков: долгота и широта, разложенные `python3 tools/globe.py`.
+       На шар их кладёт app.js — шар крутится, и проекция считается каждый кадр. -->
+  <script defer src="land.js?v=76"></script>
+  <script defer src="wordmark.js?v=76"></script>
+  <script defer src="app.js?v=76"></script>
+
+  <!-- Сторож загрузки. Витрину рисует app.js, и пока его нет, страница по
+       `body:not(.lit)` чёрная и пустая — ровно то, что видит покупатель,
+       когда файл не доехал: не ошибка, а чёрный экран навсегда. Этот кусок
+       живёт в самой странице, а она едет целиком каждый раз, поэтому он
+       остаётся жив и тогда, когда не доехало вообще ничего. Одна
+       перезагрузка лечит обрыв связи; если и она не помогла, покупатель
+       должен прочитать, что случилось, а не гадать. -->
+  <script>
+    setTimeout(function () {
+      if (document.body.classList.contains('lit')) return;
+      var again = false;
+      try { again = !sessionStorage.getItem('boot-retry'); sessionStorage.setItem('boot-retry', '1'); } catch (e) { /* закрытое хранилище: без второй попытки */ }
+      if (again) return location.reload();
+      document.body.className = 'lit';
+      document.body.innerHTML = '<p style="font:500 15px/1.5 -apple-system,system-ui,sans-serif;'
+        + 'color:#0a0a0a;text-align:center;padding:40vh 32px 0">Витрина не загрузилась.<br>'
+        + 'Проверьте связь и откройте снова.</p>';
+    }, 12000);
+  </script>
 </body>
 </html>

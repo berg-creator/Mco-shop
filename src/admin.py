@@ -16,12 +16,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from html import escape
 from uuid import uuid4
 
 from aiogram import Bot, F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import BaseFilter, Command
+from aiogram.filters.logic import or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -32,11 +35,18 @@ from aiogram.types import (
     TelegramObject,
 )
 
-from . import config, db
+from . import config, db, music
+from .bot import ADMIN_BUTTONS, BTN_ADD, BTN_CANCEL, BTN_ITEMS, BTN_MUSIC, BTN_SHOP
 
 log = logging.getLogger(__name__)
 
 MAX_PHOTOS = 5
+# Больше двадцати мегабайт Bot API боту не отдаёт — это его предел на скачивание,
+# и упереться в него молча значит оставить владельца гадать, что случилось.
+MAX_TRACK = 20 * 1024 * 1024
+# Ответ мастеру — это ответ на его вопрос, а не команда. Без этого условия
+# `/start`, набранный посреди «Остатка», становился размером товара.
+PLAIN_TEXT = F.text & ~F.text.startswith("/")
 SKIP = {"-", "нет", "пропустить", "далее"}
 CANCEL = {"отмена", "стоп", "/cancel"}
 
@@ -64,6 +74,10 @@ class NewProduct(StatesGroup):
     description = State()
 
 
+class NewMusic(StatesGroup):
+    file = State()
+
+
 class EditStock(StatesGroup):
     value = State()
 
@@ -83,13 +97,26 @@ def _categories_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@router.message(Command("cancel"))
+@router.message(F.text.startswith("/") | F.text.in_(ADMIN_BUTTONS))
+async def command_beats_wizard(message: Message, state: FSMContext) -> None:
+    """Команда или кнопка обрывает мастер, а не становится ответом на его вопрос.
+
+    Мастер ловит любой текст, и брошенный на полпути «Остаток» съедал
+    следующий `/start`: размером товара становилось слово «/START», а до
+    магазина команда не доходила. Теперь черновик выбрасывается, а событие
+    идёт дальше — к обработчику самой команды.
+    """
+    await state.clear()
+    raise SkipHandler
+
+
+@router.message(or_f(Command("cancel"), F.text == BTN_CANCEL))
 async def cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Отменил.")
 
 
-@router.message(Command("add"))
+@router.message(or_f(Command("add"), F.text == BTN_ADD))
 async def add_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(NewProduct.photos)
@@ -129,7 +156,7 @@ async def add_photo(message: Message, state: FSMContext, bot: Bot) -> None:
         await message.answer(f"Фото принято ({len(photos)}).", reply_markup=_done_keyboard())
 
 
-@router.message(NewProduct.photos, F.text)
+@router.message(NewProduct.photos, PLAIN_TEXT)
 async def add_photos_text(message: Message, state: FSMContext) -> None:
     if message.text.strip().lower() in CANCEL:
         await cancel(message, state)
@@ -148,7 +175,7 @@ async def _ask_name(message: Message, state: FSMContext) -> None:
     await message.answer("Название вещи. Например: «Куртка Garment Dyed Crinkle Reps».")
 
 
-@router.message(NewProduct.name, F.text)
+@router.message(NewProduct.name, PLAIN_TEXT)
 async def add_name(message: Message, state: FSMContext) -> None:
     text = message.text.strip()
     if text.lower() in CANCEL:
@@ -159,7 +186,7 @@ async def add_name(message: Message, state: FSMContext) -> None:
     await message.answer("Бренд. Если без бренда — «-».")
 
 
-@router.message(NewProduct.brand, F.text)
+@router.message(NewProduct.brand, PLAIN_TEXT)
 async def add_brand(message: Message, state: FSMContext) -> None:
     text = message.text.strip()
     if text.lower() in CANCEL:
@@ -179,7 +206,7 @@ async def add_category(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.answer("Цена в рублях. Можно со скидкой: «24000 из 30000».")
 
 
-@router.message(NewProduct.price, F.text)
+@router.message(NewProduct.price, PLAIN_TEXT)
 async def add_price(message: Message, state: FSMContext) -> None:
     text = message.text.strip().lower()
     if text in CANCEL:
@@ -222,7 +249,7 @@ def parse_sizes(text: str) -> dict[str, int]:
     return sizes or {db.ONE_SIZE: 1}
 
 
-@router.message(NewProduct.sizes, F.text)
+@router.message(NewProduct.sizes, PLAIN_TEXT)
 async def add_sizes(message: Message, state: FSMContext) -> None:
     text = message.text.strip()
     if text.lower() in CANCEL:
@@ -233,7 +260,7 @@ async def add_sizes(message: Message, state: FSMContext) -> None:
     await message.answer("Описание: состояние, цвет, что важно знать. Или «-».")
 
 
-@router.message(NewProduct.description, F.text)
+@router.message(NewProduct.description, PLAIN_TEXT)
 async def add_description(message: Message, state: FSMContext, settings: config.Settings) -> None:
     text = message.text.strip()
     if text.lower() in CANCEL:
@@ -266,8 +293,98 @@ async def add_description(message: Message, state: FSMContext, settings: config.
     product = db.get_product(product_id)
     await message.answer(
         f"Готово, товар №{product_id} в витрине.\n\n{_product_line(product, settings)}\n\n"
-        "Добавить ещё — /add. Список товаров — /items.",
+        f"Добавить ещё — «{BTN_ADD}», весь список — «{BTN_ITEMS}».",
     )
+
+
+# --- музыка витрины ----------------------------------------------------------
+
+@router.message(or_f(Command("music"), F.text == BTN_MUSIC))
+async def music_start(message: Message, state: FSMContext) -> None:
+    """Плейлист витрины: фото листаются в темпе той песни, что играет сейчас."""
+    await state.clear()
+    await state.set_state(NewMusic.file)
+    await message.answer(
+        f"{_playlist_lines()}\n\n"
+        "Присылай песни файлами — витрина играет их подряд и каждый раз "
+        "в новом порядке, а фото в карточке листаются в темпе того, что "
+        "играет. Темп посчитаю сам.\n\n"
+        "Убрать всю музыку — «-». Выйти: «отмена»."
+    )
+
+
+def _playlist_lines() -> str:
+    """Что сейчас в плейлисте — списком, по строке на песню."""
+    tracks = music.playlist()
+    if not tracks:
+        return "Сейчас в витрине тихо: музыки нет."
+    songs = "\n".join(
+        f"{number}. {escape(track.get('title') or track['file'])} — {track['bpm']} BPM"
+        for number, track in enumerate(tracks, 1)
+    )
+    return f"Сейчас в плейлисте {len(tracks)}:\n{songs}"
+
+
+# Песня добавляется без состояния мастера: аудиофайл от владельца — это
+# всегда музыка для витрины, а альбом присылается пачкой, и требовать
+# «Музыку» перед каждым файлом значило бы жать кнопку одиннадцать раз.
+@router.message(F.audio | (F.document & F.document.mime_type.startswith("audio/")))
+async def music_file(message: Message, state: FSMContext, bot: Bot) -> None:
+    track = message.audio or message.document
+    if (track.file_size or 0) > MAX_TRACK:
+        await message.answer(
+            f"Файл больше {MAX_TRACK // 1024 // 1024} МБ — столько Telegram боту не отдаёт. "
+            "Пришли версию полегче."
+        )
+        return
+
+    config.MUSIC.mkdir(parents=True, exist_ok=True)
+    name = music.free_name(music.suffix_for(track.mime_type))
+    # Имя занимается пустым файлом сразу: альбом приходит пачкой, обработчики
+    # у aiogram работают параллельно, и без этого две песни, скачиваемые
+    # одновременно, выбрали бы одно имя и одна затёрла бы другую.
+    (config.MUSIC / name).touch()
+    try:
+        await bot.download(track.file_id, destination=config.MUSIC / name)
+    except Exception as error:  # noqa: BLE001 — связь до Telegram может подвести
+        log.warning("трек не скачался: %s", error)
+        (config.MUSIC / name).unlink(missing_ok=True)
+        await message.answer("Файл не скачался. Пришли ещё раз.")
+        return
+
+    await state.clear()
+    # Счёт занимает секунды, но он считает, а не ждёт: в общем цикле это
+    # заморозило бы бота вместе с заявками покупателей.
+    info = await asyncio.to_thread(music.analyze, config.MUSIC / name)
+    # Название — из тегов файла, а если их нет, из имени файла без расширения.
+    title = getattr(track, "title", None) or (getattr(track, "file_name", "") or "").rsplit(".", 1)[0]
+    count = music.add(name, title or "Без названия", info or music.DEFAULT_FLIP)
+    if info:
+        await message.answer(
+            f"Взял, в плейлисте {count}.\n\n"
+            f"Темп: {info['bpm']} BPM, снимок держится {info['flip_ms'] / 1000:.1f} с — "
+            "фото листаются по долям.\n"
+            f"Присылай ещё или открой витрину кнопкой «{BTN_SHOP}» и проверь."
+        )
+    else:
+        await message.answer(
+            f"Песню взял, в плейлисте {count}. Темп определить не вышло "
+            "(на сервере нет ffmpeg или это не музыка) — под неё фото листаются раз в 3 секунды."
+        )
+
+
+@router.message(NewMusic.file, PLAIN_TEXT)
+async def music_text(message: Message, state: FSMContext) -> None:
+    text = message.text.strip().lower()
+    if text in CANCEL:
+        await cancel(message, state)
+        return
+    if text in SKIP:
+        await state.clear()
+        music.forget()
+        await message.answer("Убрал музыку, в витрине тихо.")
+        return
+    await message.answer("Жду песню файлом. Или «-» — убрать музыку совсем.")
 
 
 def _product_line(product: dict, settings: config.Settings) -> str:
@@ -316,13 +433,38 @@ def _item_keyboard(product: dict) -> InlineKeyboardMarkup:
     )
 
 
-@router.message(Command("items"))
+@router.message(or_f(Command("items"), F.text == BTN_ITEMS))
 async def items(message: Message, settings: config.Settings) -> None:
-    products = db.products_for_admin(limit=20)
+    """Список товаров, а с запросом — поиск по нему.
+
+    Без запроса — последние двадцать. С запросом — номер товара или кусок
+    названия: в витрине под сотню вещей, и до старой карточки с телефона
+    иначе не добраться. Отбор в Python, а не в SQL: LIKE в SQLite не знает
+    регистра кириллицы, и «куртка» не нашла бы «Куртка».
+    """
+    # Запрос бывает только у команды: у кнопки в тексте пробел тоже есть,
+    # и без этой проверки «📦 Товары» искалось бы как слово «товары».
+    query = message.text.partition(" ")[2].strip().lower() if message.text.startswith("/") else ""
+    if query.isdigit():
+        product = db.get_product(int(query))
+        products = [product] if product else []
+    elif query:
+        products = [
+            product for product in db.products_for_admin(limit=500)
+            if query in f"{product['brand']} {product['name']}".lower()
+        ][:20]
+    else:
+        products = db.products_for_admin(limit=20)
+
     if not products:
-        await message.answer("Товаров пока нет. Добавить — /add")
+        await message.answer(
+            f"Ничего не нашлось. Весь список — «{BTN_ITEMS}»" if query
+            else f"Товаров пока нет. Заводится кнопкой «{BTN_ADD}»"
+        )
         return
-    await message.answer(f"Последние {len(products)} товаров:")
+    await message.answer(
+        f"Нашёл {len(products)}:" if query else f"Последние {len(products)} товаров:"
+    )
     for product in products:
         await message.answer(_product_line(product, settings), reply_markup=_item_keyboard(product))
 
@@ -370,7 +512,7 @@ async def ask_stock(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@router.message(EditStock.value, F.text)
+@router.message(EditStock.value, PLAIN_TEXT)
 async def set_stock(message: Message, state: FSMContext, settings: config.Settings) -> None:
     text = message.text.strip()
     if text.lower() in CANCEL:

@@ -29,6 +29,36 @@ class ФейкФайл:
         self.file_id = file_id
 
 
+class ФейкТрек:
+    """Аудиофайл или документ в сообщении."""
+
+    def __init__(
+        self,
+        file_id: str = "CQACpesnya",
+        mime_type: str = "audio/mpeg",
+        file_size: int = 3_000_000,
+        title: str | None = None,
+        file_name: str | None = None,
+    ) -> None:
+        self.file_id = file_id
+        self.mime_type = mime_type
+        self.file_size = file_size
+        self.title = title
+        self.file_name = file_name
+
+
+class ФейкПересылка:
+    """`forward_origin` пересланного сообщения.
+
+    У покупателя с закрытыми пересылками Telegram присылает происхождение
+    без пользователя — поле просто отсутствует, поэтому и здесь его нет.
+    """
+
+    def __init__(self, user: ФейкПользователь | None = None) -> None:
+        if user is not None:
+            self.sender_user = user
+
+
 class ФейкСообщение:
     """Сообщение, которое запоминает ответы вместо отправки в Telegram."""
 
@@ -38,13 +68,25 @@ class ФейкСообщение:
         user_id: int = 1,
         photo: list[ФейкФайл] | None = None,
         edit_fails: bool = False,
+        audio: ФейкТрек | None = None,
+        document: ФейкТрек | None = None,
+        reply_to: "ФейкСообщение | None" = None,
+        forward_origin: ФейкПересылка | None = None,
+        падает: bool = False,
     ) -> None:
         self.text = text
         self.from_user = ФейкПользователь(user_id)
         self.photo = photo or []
+        self.audio = audio
+        self.document = document
         self.edit_fails = edit_fails
+        self.reply_to_message = reply_to
+        self.forward_origin = forward_origin
+        self.падает = падает
         self.answers: list[tuple[str, Any]] = []
         self.edits: list[tuple[str, Any]] = []
+        self.forwards: list[int] = []
+        self.copies: list[int] = []
 
     async def answer(self, text: str, reply_markup: Any = None, **kwargs: Any) -> "ФейкСообщение":
         self.answers.append((text, reply_markup))
@@ -55,6 +97,18 @@ class ФейкСообщение:
             # Сообщение старше двух суток: Telegram отказывается его править.
             raise RuntimeError("message can't be edited")
         self.edits.append((text, reply_markup))
+        return self
+
+    async def forward(self, chat_id: int, **kwargs: Any) -> "ФейкСообщение":
+        if self.падает:
+            raise RuntimeError("chat not found")
+        self.forwards.append(chat_id)
+        return self
+
+    async def copy_to(self, chat_id: int, **kwargs: Any) -> "ФейкСообщение":
+        if self.падает:
+            raise RuntimeError("bot was blocked by the user")
+        self.copies.append(chat_id)
         return self
 
     @property
@@ -91,6 +145,7 @@ class ФейкБот:
         self.падает = падает
         self.sent: list[tuple[int, str]] = []
         self.menu_button: Any = None
+        self.commands: list[tuple[Any, list[str]]] = []
         self.downloaded: list[str] = []
 
     async def send_message(self, chat_id: int, text: str, reply_markup: Any = None, **kw: Any) -> None:
@@ -100,6 +155,17 @@ class ФейкБот:
 
     async def set_chat_menu_button(self, menu_button: Any = None, **kwargs: Any) -> None:
         self.menu_button = menu_button
+
+    async def get_chat_menu_button(self, **kwargs: Any) -> Any:
+        # Та же кнопка, что поставил прошлый запуск: Telegram помнит её за нас.
+        return self.menu_button
+
+    async def set_my_commands(self, commands: Any, scope: Any = None, **kwargs: Any) -> None:
+        # Личный список команд Telegram ставит только в существующий чат:
+        # владелец, который ещё не написал боту, — это ошибка, а не поломка.
+        if self.падает and scope is not None:
+            raise RuntimeError("chat not found")
+        self.commands.append((scope, [command.command for command in commands]))
 
     async def download(self, file_id: str, destination: Any = None) -> None:
         if self.падает:

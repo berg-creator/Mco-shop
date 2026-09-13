@@ -11,8 +11,18 @@ from __future__ import annotations
 
 import unittest
 
+from aiogram.dispatcher.event.bases import SkipHandler
+from aiogram.types import MenuButtonWebApp, WebAppInfo
+
 from src import bot, db
-from tests.fakes import ФейкБот, ФейкКнопка, ФейкСообщение, ФейкФайл  # noqa: F401
+from tests.fakes import (  # noqa: F401
+    ФейкБот,
+    ФейкКнопка,
+    ФейкПересылка,
+    ФейкПользователь,
+    ФейкСообщение,
+    ФейкФайл,
+)
 from tests.test_shop import БазаНаВремя, настройки
 
 
@@ -23,8 +33,28 @@ class ТестыКоманд(БазаНаВремя, unittest.IsolatedAsyncioTes
         text, keyboard = message.answers[0]
         self.assertIn("Mco shop", text)
         self.assertEqual(
-            keyboard.inline_keyboard[0][0].web_app.url, "https://example.org/app/"
+            keyboard.keyboard[0][0].web_app.url, "https://example.org/app/"
         )
+
+    async def test_покупателю_не_показываются_кнопки_владельца(self) -> None:
+        message = ФейкСообщение("/start", user_id=77)
+        await bot.start(message, настройки())
+        подписи = [кнопка.text for ряд in message.answers[0][1].keyboard for кнопка in ряд]
+        self.assertEqual(подписи, [bot.BTN_SHOP, bot.BTN_HELP])
+
+    async def test_владельцу_команды_приходят_кнопками(self) -> None:
+        message = ФейкСообщение("/start", user_id=1)
+        await bot.start(message, настройки())
+        подписи = [кнопка.text for ряд in message.answers[0][1].keyboard for кнопка in ряд]
+        self.assertEqual(set(bot.ADMIN_BUTTONS) - set(подписи), set())
+
+    async def test_кнопка_как_заказать_работает_как_команда(self) -> None:
+        # Проверяется фильтр, а не функция: кнопка шлёт обычный текст, и без
+        # своего условия он ушёл бы владельцу как вопрос покупателя.
+        message = ФейкСообщение(bot.BTN_HELP, user_id=77)
+        await bot.router.message.trigger(message, settings=настройки(), bot=ФейкБот())
+        self.assertIn("Как это работает", message.последний_ответ)
+        self.assertEqual(message.forwards, [])
 
     async def test_shop_ведёт_в_витрину(self) -> None:
         message = ФейкСообщение("/shop")
@@ -43,8 +73,40 @@ class ТестыКоманд(БазаНаВремя, unittest.IsolatedAsyncioTes
 
     async def test_кнопка_меню_ставится_на_адрес_витрины(self) -> None:
         fake = ФейкБот()
-        await bot.setup_menu_button(fake, настройки())
+        await bot.setup_bot_menu(fake, настройки())
         self.assertEqual(fake.menu_button.web_app.url, "https://example.org/app/")
+
+    async def test_команды_покупателю_короче_чем_владельцу(self) -> None:
+        fake = ФейкБот()
+        await bot.setup_bot_menu(fake, настройки())
+        (общий, покупателю), (личный, владельцу) = fake.commands
+        self.assertIsNone(общий)
+        self.assertEqual(покупателю, ["start", "help"])
+        self.assertEqual(личный.chat_id, 1)
+        self.assertIn("add", владельцу)
+
+    async def test_смена_адреса_витрины_шлёт_владельцу_свежую_кнопку(self) -> None:
+        """Кнопка под полем ввода живёт в чате: без нового сообщения её не сменить."""
+        fake = ФейкБот()
+        fake.menu_button = MenuButtonWebApp(
+            text="Магазин", web_app=WebAppInfo(url="https://старый-туннель.example/app/")
+        )
+        await bot.setup_bot_menu(fake, настройки())
+        self.assertEqual([chat_id for chat_id, _ in fake.sent], [1])
+
+    async def test_прежний_адрес_витрины_владельца_не_будит(self) -> None:
+        fake = ФейкБот()
+        fake.menu_button = MenuButtonWebApp(
+            text="Магазин", web_app=WebAppInfo(url="https://example.org/app/")
+        )
+        await bot.setup_bot_menu(fake, настройки())
+        self.assertEqual(fake.sent, [])
+
+    async def test_молчащий_чат_владельца_не_мешает_запуску(self) -> None:
+        fake = ФейкБот(падает=True)
+        with self.assertLogs("src.bot", level="WARNING"):
+            await bot.setup_bot_menu(fake, настройки())
+        self.assertEqual(len(fake.commands), 1)
 
 
 class ЗаявкаВБоте(БазаНаВремя):
@@ -235,6 +297,63 @@ class ТестыСпискаЗаявок(ЗаявкаВБоте, unittest.Isolat
         закрытая_строка = next(k for k in клавиатуры if f"№{закрытая['id']}" in k)
         self.assertIsNotNone(клавиатуры[новая_строка])
         self.assertIsNone(клавиатуры[закрытая_строка])
+
+
+class ТестыВопросов(БазаНаВремя, unittest.IsolatedAsyncioTestCase):
+    """Почта между покупателем и владельцем: вопрос туда, ответ обратно."""
+
+    async def test_вопрос_покупателя_уходит_владельцу_с_квитанцией(self) -> None:
+        message = ФейкСообщение("Есть этот размер?", user_id=77)
+        await bot.ask_seller(message, настройки())
+        self.assertEqual(message.forwards, [1])
+        self.assertIn("Передал владельцу", message.последний_ответ)
+
+    async def test_чужая_команда_не_беспокоит_владельца(self) -> None:
+        # Подобранная на слух команда — это не вопрос покупателя: владельцу
+        # прилетало бы «/add» от незнакомого человека, и ответить на это нечем.
+        message = ФейкСообщение("/add", user_id=77)
+        await bot.ask_seller(message, настройки())
+        self.assertEqual(message.forwards, [])
+        self.assertEqual(message.answers, [])
+
+    async def test_владелец_сам_себе_вопросов_не_шлёт(self) -> None:
+        message = ФейкСообщение("заметка", user_id=1)
+        await bot.ask_seller(message, настройки())
+        self.assertEqual(message.forwards, [])
+        self.assertEqual(message.answers, [])
+
+    async def test_недоступный_владелец_не_обещает_покупателю_лишнего(self) -> None:
+        message = ФейкСообщение("Есть этот размер?", user_id=77, падает=True)
+        with self.assertLogs("src.bot", level="WARNING"):
+            await bot.ask_seller(message, настройки())
+        self.assertIn("Не получилось", message.последний_ответ)
+
+    async def test_ответ_владельца_доходит_покупателю(self) -> None:
+        вопрос = ФейкСообщение("Есть этот размер?", forward_origin=ФейкПересылка(ФейкПользователь(77)))
+        ответ = ФейкСообщение("Да, последний", user_id=1, reply_to=вопрос)
+        await bot.answer_customer(ответ, настройки())
+        self.assertEqual(ответ.copies, [77])
+        self.assertIn("Отправил", ответ.последний_ответ)
+
+    async def test_ответ_покупателя_на_пересылку_идёт_как_вопрос(self) -> None:
+        пересланное = ФейкСообщение("чужой пост", forward_origin=ФейкПересылка(ФейкПользователь(9)))
+        message = ФейкСообщение("а такое есть?", user_id=77, reply_to=пересланное)
+        with self.assertRaises(SkipHandler):
+            await bot.answer_customer(message, настройки())
+
+    async def test_скрытая_пересылка_не_даёт_ответить_молча(self) -> None:
+        вопрос = ФейкСообщение("Есть этот размер?", forward_origin=ФейкПересылка())
+        ответ = ФейкСообщение("Да", user_id=1, reply_to=вопрос)
+        await bot.answer_customer(ответ, настройки())
+        self.assertEqual(ответ.copies, [])
+        self.assertIn("скрыл пересылку", ответ.последний_ответ)
+
+    async def test_заблокировавший_бота_покупатель_виден_владельцу(self) -> None:
+        вопрос = ФейкСообщение("Есть этот размер?", forward_origin=ФейкПересылка(ФейкПользователь(77)))
+        ответ = ФейкСообщение("Да", user_id=1, reply_to=вопрос, падает=True)
+        with self.assertLogs("src.bot", level="INFO"):
+            await bot.answer_customer(ответ, настройки())
+        self.assertIn("Не доставил", ответ.последний_ответ)
 
 
 if __name__ == "__main__":

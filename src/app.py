@@ -19,7 +19,7 @@ import sys
 from aiohttp import web as aiohttp_web
 
 from . import admin, config, db, server
-from .bot import notify_admins, router as shop_router, setup_menu_button
+from .bot import notify_admins, router as shop_router, setup_bot_menu
 
 log = logging.getLogger("магазин")
 
@@ -69,7 +69,7 @@ async def run(settings: config.Settings, web_only: bool = False) -> None:
     dispatcher.include_router(shop_router)
 
     try:
-        await setup_menu_button(bot, settings)
+        await setup_bot_menu(bot, settings)
         me = await bot.get_me()
         log.info("бот @%s на связи, витрина: %s", me.username, settings.webapp_url)
         await dispatcher.start_polling(bot)

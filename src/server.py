@@ -14,6 +14,7 @@ HMAC-SHA256 на ключе, выведенном из токена бота; с
 
     GET  /app/            витрина мини-приложения
     GET  /photos/<файл>   фотографии товаров
+    GET  /music/<файл>    песни магазина, если владелец их прислал
     GET  /api/catalog     каталог, категории, бренды, размеры
     POST /api/order       заявка: проверка подписи, резерв, письмо владельцу
     GET  /healthz         жив ли процесс (для сторожа на сервере)
@@ -30,7 +31,7 @@ from typing import Any, Awaitable, Callable
 
 from aiohttp import web
 
-from . import config, db
+from . import config, db, music
 
 # Подпись Telegram считается протухшей через сутки: столько мини-приложение
 # может провисеть открытым в фоне, дольше — уже подозрительно.
@@ -135,6 +136,9 @@ async def handle_catalog(request: web.Request) -> web.Response:
             "currency": settings.currency,
             "delivery_options": list(settings.delivery_options),
             "catalog": db.catalog(),
+            # Плейлист и ритм каждой песни: витрина тасует его и листает фото
+            # в темпе того, что играет сейчас.
+            "music": music.playlist(),
         },
         dumps=lambda payload: json.dumps(payload, ensure_ascii=False),
     )
@@ -207,10 +211,8 @@ async def handle_order(request: web.Request) -> web.Response:
 
 
 async def handle_index(request: web.Request) -> web.FileResponse:
-    return web.FileResponse(
-        config.WEBAPP / "index.html",
-        headers={"Cache-Control": "no-cache"},
-    )
+    """Страница витрины; `no-store` на неё вешает middleware, как и на весь /app."""
+    return web.FileResponse(config.WEBAPP / "index.html")
 
 
 async def handle_root(request: web.Request) -> web.Response:
@@ -224,15 +226,31 @@ async def handle_health(request: web.Request) -> web.Response:
 
 @web.middleware
 async def no_cache_for_webapp(request: web.Request, handler: Callable) -> web.StreamResponse:
-    """Витрина не кэшируется, фотографии кэшируются надолго.
+    """Витрина не хранится у клиента вовсе, фотографии хранятся надолго.
 
-    Иначе после правки `app.js` владелец видит старую витрину и решает, что
-    ничего не изменилось, — а фото по имени файла не меняются никогда.
+    Сначала `no-store` стоял на одной странице: в WebKit у владельца осела
+    обрезанная копия — только `<head>`, без `app.js`, — и витрина не
+    открывалась месяцами, пока ETag совпадал. Теперь то же случилось с самим
+    `app.js`, и причина у обоих одна. nginx отдаёт сжатое через
+    `Transfer-Encoding: chunked`, без `Content-Length`: оборвись связь на
+    середине — WebKit не отличит обрывок от целого файла и сложит его в кэш.
+    Дальше слабый ETag сходится, приходит 304, и обрезанный `app.js`
+    переиспользуется вечно. Мобильный интернет рвёт связь регулярно, а
+    `app.js` — самый крупный файл витрины, так что рано или поздно попадает
+    именно он.
+
+    `no-store` не даёт обрывку осесть: витрина едет целиком каждый раз, а это
+    девяносто килобайт сжатыми. Медленно на плохой связи — но открывается,
+    в отличие от кэша, который сломан навсегда. Метка `?v=` в адресах остаётся:
+    она нужна прокси по дороге, своего кэша у клиента больше нет.
+
+    Фото и трек кэшируются: имя фотографии не меняется никогда, у трека в
+    адресе метка версии, и присланная песня приезжает как новый адрес.
     """
     response = await handler(request)
     if request.path.startswith("/app"):
-        response.headers.setdefault("Cache-Control", "no-cache")
-    elif request.path.startswith("/photos"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    elif request.path.startswith(("/photos", "/music")):
         response.headers.setdefault("Cache-Control", "public, max-age=604800")
     return response
 
@@ -248,6 +266,7 @@ def create_app(
     app[ALLOW_UNSIGNED] = allow_unsigned
 
     config.PHOTOS.mkdir(parents=True, exist_ok=True)
+    config.MUSIC.mkdir(parents=True, exist_ok=True)
 
     app.router.add_get("/", handle_root)
     app.router.add_get("/app/", handle_index)
@@ -256,4 +275,5 @@ def create_app(
     app.router.add_post("/api/order", handle_order)
     app.router.add_static("/app/", config.WEBAPP)
     app.router.add_static("/photos/", config.PHOTOS)
+    app.router.add_static("/music/", config.MUSIC)
     return app
